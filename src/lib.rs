@@ -108,6 +108,14 @@
 
 use std::collections::BTreeMap;
 
+mod graph;
+pub use graph::{
+    corpus_file, corpus_scope, CORPUS_PREFIX, CORPUS_READ, CORPUS_READ_PREFIX, DEFAULT_NODES,
+    ENTITY_ID, ENTITY_PREFIX, ENTITY_STATEMENTS, ENTITY_TEMPLATE, GRAPH_ID, GRAPH_PREFIX,
+    GRAPH_TEMPLATE, MAX_DEPTH, MAX_NODES, NEIGHBORHOOD_ID, NEIGHBORHOOD_PREFIX,
+    NEIGHBORHOOD_TEMPLATE, STORE_GRAPH_READ, STORE_GRAPH_READ_PREFIX,
+};
+
 use async_trait::async_trait;
 use ikigai_core::{
     ArgSpec, Description, Endpoint, EndpointSpace, Error, Invocation, Iri, ReprType,
@@ -141,7 +149,7 @@ pub const SOURCE_READ: &str = "urn:cap:knowledge:read:source:name:*";
 /// path where the file is served.
 pub const FS_READ: &str = "urn:cap:fs:read:*";
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const TEXT: &str = "text/plain";
 const TURTLE: &str = "text/turtle";
 
@@ -156,6 +164,19 @@ pub fn space() -> EndpointSpace {
         .bind(
             UriTemplate::parse(SOURCE_TEMPLATE).expect("SOURCE_TEMPLATE is a valid template"),
             SourceEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(GRAPH_TEMPLATE).expect("GRAPH_TEMPLATE is a valid template"),
+            graph::GraphEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(ENTITY_TEMPLATE).expect("ENTITY_TEMPLATE is a valid template"),
+            graph::EntityEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(NEIGHBORHOOD_TEMPLATE)
+                .expect("NEIGHBORHOOD_TEMPLATE is a valid template"),
+            graph::NeighborhoodEndpoint,
         )
         .named(ikigai_core::space_iri("knowledge"))
 }
@@ -184,12 +205,13 @@ pub fn source_scope(name: &str) -> String {
 /// assert!(ikigai_knowledge::source_file("../elsewhere").is_err());
 /// ```
 pub fn source_file(name: &str) -> Result<String> {
-    check_name(name)?;
+    check_name("name", name)?;
     Ok(format!("{FILE_PREFIX}source/{name}.ttl"))
 }
 
-/// A name is one ordinary path segment, and a plain IRI segment.
-fn check_name(name: &str) -> Result<()> {
+/// A name is one ordinary path segment, and a plain IRI segment. `arg` is the argument that
+/// carries it: `name` for a source, `corpus` for a corpus.
+pub(crate) fn check_name(arg: &str, name: &str) -> Result<()> {
     let ok = !name.is_empty()
         && !name.starts_with('.')
         && name.len() <= 64
@@ -199,11 +221,16 @@ fn check_name(name: &str) -> Result<()> {
     if ok {
         Ok(())
     } else {
+        let (kind, dir) = if arg == "name" {
+            ("source", "source")
+        } else {
+            ("corpus", "corpus")
+        };
         Err(Error::InvalidArgument {
-            name: "name".to_string(),
+            name: arg.to_string(),
             detail: format!(
-                "`{name}` is not a source name: use 1 to 64 letters, digits, `-`, `_` and `.`, \
-                 not starting with `.` (the file knowledge/source/{{name}}.ttl in the config home)"
+                "`{name}` is not a {kind} name: use 1 to 64 letters, digits, `-`, `_` and `.`, \
+                 not starting with `.` (the file knowledge/{dir}/{{name}}.ttl in the config home)"
             ),
         })
     }
@@ -403,4 +430,53 @@ impl Declaration {
 /// The source's own IRI, the base `<>` resolves to.
 fn source_iri(name: &str) -> String {
     format!("{SOURCE_PREFIX}{name}")
+}
+
+/// Read a Turtle file through the kernel and parse it against `base`, refusing a blank node.
+/// `what` names the thing the file declares and `path` the file, for every sentence.
+pub(crate) async fn read_turtle(
+    inv: &Invocation<'_>,
+    file: &str,
+    base: &str,
+    what: &str,
+    path: &str,
+) -> Result<Vec<Triple>> {
+    let file_iri = Iri::parse(file).map_err(|e| Error::Endpoint(format!("{what}: {e}")))?;
+    let repr = match inv.source(&file_iri).await {
+        Ok(repr) => repr,
+        Err(Error::NotFound(why)) => {
+            inv.depends_on(file);
+            return Err(Error::NotFound(format!(
+                "no {what} is declared: {why} (expected at {path} in the config home, read as \
+                 {file})"
+            )));
+        }
+        Err(Error::Unresolved(_)) => {
+            inv.depends_on(file);
+            return Err(Error::NotFound(format!(
+                "no {what} is declared: nothing serves {file} in this kernel; a host serves \
+                 declarations by binding a file module at {FILE_TEMPLATE} over the config \
+                 home's knowledge directory"
+            )));
+        }
+        Err(e) => return Err(e),
+    };
+    let mut parser = TurtleParser::new()
+        .with_base_iri(base)
+        .map_err(|e| Error::Endpoint(format!("{what}: {e}")))?
+        .for_slice(&repr.bytes);
+    let mut triples = Vec::new();
+    for triple in parser.by_ref() {
+        let triple = triple
+            .map_err(|e| Error::Endpoint(format!("{what}: {path} is not valid Turtle: {e}")))?;
+        if matches!(triple.subject, NamedOrBlankNode::BlankNode(_))
+            || matches!(triple.object, Term::BlankNode(_))
+        {
+            return Err(Error::Endpoint(format!(
+                "{what}: {path} has a blank node in `{triple}`; name every resource with an IRI"
+            )));
+        }
+        triples.push(triple);
+    }
+    Ok(triples)
 }
