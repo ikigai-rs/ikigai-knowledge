@@ -9,7 +9,9 @@ mod common;
 
 use common::*;
 use ikigai_core::{Capability, Error, Verb};
-use ikigai_knowledge::{corpus_scope, ENTITY_PREFIX, GRAPH_PREFIX, NEIGHBORHOOD_PREFIX};
+use ikigai_knowledge::{
+    corpus_scope, source_scope, ENTITY_PREFIX, GRAPH_PREFIX, NEIGHBORHOOD_PREFIX,
+};
 use ikigai_store::cap_read_graph;
 
 fn setup(tag: &str) -> (Scratch, ikigai_core::Kernel) {
@@ -24,6 +26,7 @@ fn setup(tag: &str) -> (Scratch, ikigai_core::Kernel) {
 fn grants(scratch: &Scratch, graphs: &[&str]) -> Capability {
     let mut scopes = vec![
         corpus_scope("work"),
+        source_scope("ledger"),
         format!("urn:cap:fs:read:{}", scratch.knowledge().display()),
     ];
     scopes.extend(graphs.iter().map(|g| cap_read_graph(g)));
@@ -93,6 +96,7 @@ fn a_caller_without_the_corpus_grant_is_denied_alike_for_any_corpus() {
     let cap = Capability::scoped([
         format!("urn:cap:fs:read:{}", s.knowledge().display()),
         cap_read_graph(DEFAULT),
+        source_scope("ledger"),
         corpus_scope("other"),
     ]);
     let declared = graphs(&kernel, &cap).unwrap_err();
@@ -269,4 +273,151 @@ fn a_neighborhood_without_the_ledger_token_is_empty() {
     assert!(granted.contains("\"Their Q4 migration\""), "{granted}");
     let hidden = neighborhood(&kernel, SECRET, "2", None, &grants(&s, &[DEFAULT])).unwrap();
     assert_eq!(hidden, "");
+}
+
+// ------------------------------------------------------------------------ bounds and cuts
+
+const STATE: &str = "<https://ikigai-rs.dev/ns/ledger#state>";
+const HUB: &str = "urn:iki:ledger:default:state:open";
+const TRUNCATED: &str = "<https://ikigai-rs.dev/ns/knowledge#truncated>";
+
+/// The seeded ledger plus a hub: `items` more items, and item 1, all in one state. A store
+/// whose answers stop at `rows` rows, the way a host's store stops at 100,000.
+fn hub_kernel(tag: &str, items: usize, rows: u64) -> (Scratch, ikigai_core::Kernel) {
+    use ikigai_store::budget::{AnswerBound, AnswerBudget};
+    let scratch = Scratch::new(tag);
+    scratch.declare("ledger", LEDGER_SOURCE);
+    scratch.declare_corpus("work", WORK);
+    let store = ikigai_store::DurableStore::in_memory()
+        .expect("an in-memory store")
+        .with_answer_budget(AnswerBudget::new(
+            AnswerBound::new(rows, 16 << 20).expect("a bound"),
+        ));
+    let mut quads = quads();
+    quads += &format!("<{ITEM1}> {STATE} <{HUB}> <{DEFAULT}> .\n");
+    for i in 0..items {
+        quads += &format!("<urn:iki:ledger:default:item:h{i}> {STATE} <{HUB}> <{DEFAULT}> .\n");
+    }
+    let loader = ikigai_core::Kernel::new(std::sync::Arc::new(ikigai_store::space(store.clone())));
+    issue(
+        &loader,
+        request(
+            Verb::Sink,
+            "urn:iki:store:load",
+            &[("content", &quads), ("format", "application/n-quads")],
+        ),
+        &Capability::root(),
+    )
+    .expect("seeding the store");
+    drop(loader);
+    let kernel = kernel_with_store(&scratch, store);
+    (scratch, kernel)
+}
+
+#[test]
+fn a_hub_node_shortens_the_walk_instead_of_failing_it() {
+    // 1,500 items share one state, and the store answers at most 1,200 rows: a hop with no
+    // LIMIT of its own asks the store for all 1,500 and the whole neighborhood fails.
+    let (s, kernel) = hub_kernel("hood-hub", 1500, 1200);
+    let cap = grants(&s, &[DEFAULT]);
+    let got = neighborhood(&kernel, ITEM1, "2", None, &cap).unwrap();
+    assert!(got.contains(&format!("<{ITEM1}> {STATE} <{HUB}>")), "{got}");
+    // The budget held: at most 100 nodes, and the answer says it was cut.
+    let mut nodes: Vec<&str> = got
+        .split(['<', '>'])
+        .filter(|w| {
+            w.starts_with("urn:iki:ledger:default:")
+                || w.starts_with("urn:iki:person:")
+                || w.starts_with("urn:kata:")
+        })
+        .collect();
+    nodes.sort();
+    nodes.dedup();
+    assert!(nodes.len() <= 100, "{}", nodes.len());
+    assert!(got.contains(TRUNCATED), "{got}");
+    // Deterministic.
+    assert_eq!(got, neighborhood(&kernel, ITEM1, "2", None, &cap).unwrap());
+}
+
+#[test]
+fn a_complete_neighborhood_says_nothing_about_a_cut() {
+    let (s, kernel) = setup("hood-complete");
+    let cap = grants(&s, &[DEFAULT]);
+    let full = neighborhood(&kernel, ITEM1, "3", None, &cap).unwrap();
+    assert!(!full.contains(TRUNCATED), "{full}");
+    let small = neighborhood(&kernel, ITEM1, "3", Some("2"), &cap).unwrap();
+    let marker = format!(
+        "<{NEIGHBORHOOD_PREFIX}{ITEM1}:depth:3> {TRUNCATED} \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> ."
+    );
+    assert!(small.contains(&marker), "{small}");
+}
+
+#[test]
+fn an_entity_cut_at_its_limit_says_so_and_cuts_deterministically() {
+    // The hub names 1,500 items, more than an entity's 1,000 statements.
+    let (s, kernel) = hub_kernel("entity-cut", 1500, 100_000);
+    let cap = grants(&s, &[DEFAULT]);
+    let got = entity(&kernel, HUB, &cap).unwrap();
+    let marker = format!(
+        "<{ENTITY_PREFIX}{HUB}> {TRUNCATED} \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> ."
+    );
+    assert!(got.contains(&marker), "{got}");
+    let statements = got.lines().filter(|l| l.contains(STATE)).count();
+    assert_eq!(statements, 1000, "{got}");
+    assert_eq!(got, entity(&kernel, HUB, &cap).unwrap());
+    // An entity under the limit carries no marker.
+    let item = entity(&kernel, ITEM1, &cap).unwrap();
+    assert!(!item.contains(TRUNCATED), "{item}");
+}
+
+// ------------------------------------------------------------------------ freshness
+
+#[test]
+fn a_write_to_the_ledger_graph_is_seen_by_the_next_read() {
+    let (s, kernel) = setup("fresh");
+    let mut cap = grants(&s, &[DEFAULT]);
+    let before = entity(&kernel, ITEM1, &cap).unwrap();
+    assert!(!before.contains("\"Freshly written\""), "{before}");
+    // Read twice, so the answer is in the cache before the write.
+    assert_eq!(before, entity(&kernel, ITEM1, &cap).unwrap());
+    let update = format!(
+        "INSERT DATA {{ GRAPH <{DEFAULT}> {{ <{ITEM1}> <http://purl.org/dc/terms/description> \"Freshly written\" }} }}"
+    );
+    let writer = Capability::scoped([ikigai_store::cap_write_graph(DEFAULT)]);
+    issue(
+        &kernel,
+        request(
+            Verb::Sink,
+            "urn:iki:store:graph-update",
+            &[("graph", DEFAULT), ("content", &update)],
+        ),
+        &writer,
+    )
+    .expect("the write");
+    let after = entity(&kernel, ITEM1, &cap).unwrap();
+    assert!(after.contains("\"Freshly written\""), "{after}");
+    // And the neighborhood, too.
+    cap = grants(&s, &[DEFAULT]);
+    let hood = neighborhood(&kernel, ITEM1, "1", None, &cap).unwrap();
+    assert!(hood.contains("\"Freshly written\""), "{hood}");
+}
+
+#[test]
+fn a_source_the_caller_may_not_read_contributes_no_graph() {
+    let (s, kernel) = setup("graphs-source");
+    // The corpus and the store graph, but another source's grant: the floor lets it in,
+    // and the ledger source gives nothing, exactly as an undeclared one.
+    let cap = Capability::scoped([
+        corpus_scope("work"),
+        source_scope("other"),
+        format!("urn:cap:fs:read:{}", s.knowledge().display()),
+        cap_read_graph(DEFAULT),
+    ]);
+    assert_eq!(graphs(&kernel, &cap).unwrap(), "");
+    assert_eq!(entity(&kernel, ITEM1, &cap).unwrap(), "");
+    // Paired: granted the source, the same caller lists its graph.
+    assert_eq!(
+        graphs(&kernel, &grants(&s, &[DEFAULT])).unwrap(),
+        format!("{DEFAULT}\n")
+    );
 }

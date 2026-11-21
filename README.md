@@ -90,14 +90,28 @@ source urn:knowledge:neighborhood:entity:urn:iki:ledger:default:item:01m2h5t1z80
   that the caller may read: sorted IRIs, one per line, empty when there are none.
 - **Entity.** Every statement about `{e}`, or naming it, in those graphs, closed over
   `owl:sameAs`: one SPARQL CONSTRUCT through `urn:iki:store:graph-construct`, at most 1000
-  statements.
+  statements, the first 1000 in a stable order.
 - **Neighborhood.** The statements within `{n}` hops (1 to 3) of `{e}`, in either direction: a
   breadth-first walk of CONSTRUCTs that stops at a node budget (`nodes=`, 1 to 1000, default
   100), keeping each hop's statements in lexical order until the budget is spent, so the cut is
-  deterministic. A class (the object of `rdf:type`) is not a neighbor.
+  deterministic. A class (the object of `rdf:type`) is not a neighbor. Each hop asks the store
+  for at most 10 statements per node of budget, in a stable order, so a hub node (a state or a
+  person that thousands of items name) shortens the walk instead of failing it on the store's
+  own limits.
+- **Cut answers say so.** An entity past its 1000 statements, or a neighborhood cut by its
+  budget or a hop's limit, carries one more statement on the answer's own IRI,
+  `<{answer}> <https://ikigai-rs.dev/ns/knowledge#truncated> true`. A complete answer carries
+  none.
+- **Vocabulary.** `knowledge:truncated` is defined in the module's own vocabulary,
+  [`src/vocabulary.ttl`](src/vocabulary.ttl) (the `VOCABULARY` constant): an `owl:Ontology` for
+  `https://ikigai-rs.dev/ns/knowledge` whose `owl:versionInfo` is the crate version. A test
+  holds every term under that namespace the crate names to a definition there. The vocabulary is
+  published at its namespace once deployed.
 - **Faces.** The graph list is `text/plain`; an entity and a neighborhood are `text/turtle` by
   default, `as=application/n-triples` for one statement per line.
-- **Authority.** All three take `urn:cap:knowledge:read:corpus:name:{c}`, read the corpus and
+- **Authority.** All three take `urn:cap:knowledge:read:corpus:name:{c}`, read a source's graphs
+  only under `urn:cap:knowledge:read:source:name:{s}` (a source the caller may not read
+  contributes nothing, as an undeclared one), read the corpus and
   source files through the kernel (so a `urn:cap:fs:read:` grant with `ikigai-fs`), and read the
   store only under the NARROW grants, `urn:cap:store:read:graph:<iri>`. A graph the caller holds
   no grant for is never named to the store: it is absent from every answer exactly as an
@@ -123,7 +137,10 @@ let spaces: Vec<Arc<dyn Space>> = vec![
     Arc::new(ikigai_knowledge::space()),
     Arc::new(mount),
     // The corpus endpoints read the ledger's graphs through the store, by IRI: `store` is
-    // the `ikigai_store::DurableStore` the host opened once.
+    // the `ikigai_store::DurableStore` the host opened once. A host that already binds a
+    // store space (for the ledger, say) reuses THAT one and adds none: a second space over
+    // the same store turns its caching off, and one bound after a cached read refuses
+    // every request.
     Arc::new(ikigai_store::space(store.clone())),
 ];
 let kernel = Kernel::new(Arc::new(Fallback::new(spaces)));
@@ -142,9 +159,9 @@ small pure function, a SPARQL composer or a call to a model.
 | Set | Name | Kind | How | Status |
 |---|---|---|---|---|
 | source declaration | `urn:knowledge:source:name:{s}` | **ATOM** (config) | a Turtle file in the config home: which resources to ingest, their lift, their authority rank, the corpus they belong to | **live** |
-| corpus | `urn:knowledge:corpus:name:{c}` | list of names | the sources a corpus holds; a corpus is also a corridor (below). Today a Turtle file in the config home, `knowledge/corpus/{c}.ttl`, read by the graph list; not served at its own name yet | planned, ledger #3856 |
-| document | `urn:knowledge:document:source:{s}:id:{d}` | alias rule | onto the underlying resource: `urn:file:…`, `urn:iki:ledger:item:N`, `urn:repo:{repo}:file:…` | planned, ledger #3856, #3857 |
-| lift | `urn:knowledge:lift:document:{d}` | transreption | the document's structure as RDF: ikigai-markdown's generic lift plus a mapping resource; the ledger's own Turtle as is; HTML through ikigai-html; PDF and slides by a text transreptor that keeps page and offsets; a database by an R2RML/RML mapping resource | planned, ledger #3856, #3857, #3860, #3861 |
+| corpus | `urn:knowledge:corpus:name:{c}` | list of names | the sources a corpus holds; a corpus is also a corridor (below). Today a Turtle file in the config home, `knowledge/corpus/{c}.ttl`, read by the graph list; not served at its own name yet | planned, ledger #3857 |
+| document | `urn:knowledge:document:source:{s}:id:{d}` | alias rule | onto the underlying resource: `urn:file:…`, `urn:iki:ledger:item:N`, `urn:repo:{repo}:file:…` | planned, ledger #3857 |
+| lift | `urn:knowledge:lift:document:{d}` | transreption | the document's structure as RDF: ikigai-markdown's generic lift plus a mapping resource; the ledger's own Turtle as is; HTML through ikigai-html; PDF and slides by a text transreptor that keeps page and offsets; a database by an R2RML/RML mapping resource | planned, ledger #3857, #3860, #3861 |
 | passage | `urn:knowledge:passage:document:{d}:range:{start}-{end}` | tiny pure function | a slice of the lift's text; the chunking rule is a resource (`urn:knowledge:chunking:name:{n}`) | planned, ledger #3857 |
 | prompt | `urn:knowledge:prompt:name:{n}` | resource | the extraction and answer prompts are files, versioned, golden-threaded | planned, ledger #3858 |
 | ontology | `urn:knowledge:ontology:name:{n}` | resource | SHACL shapes the extracted entities and relations must satisfy | planned, ledger #3858 |

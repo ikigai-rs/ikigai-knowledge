@@ -21,7 +21,9 @@
 //!
 //! # Authority
 //!
-//! All three take `urn:cap:knowledge:read:corpus:name:{c}`, held exactly. The graphs are then
+//! All three take `urn:cap:knowledge:read:corpus:name:{c}`, held exactly, and read a source's
+//! declaration only under `urn:cap:knowledge:read:source:name:{s}`: a source the caller may
+//! not read contributes no graph, exactly as an undeclared one. The graphs are then
 //! narrowed to those the caller holds `urn:cap:store:read:graph:<iri>` for BEFORE the store is
 //! asked anything, and the store's own enumeration (`urn:iki:store:graphs`, existence and
 //! may-read) narrows them again. So a graph the caller may not read is never named to the
@@ -35,10 +37,13 @@ use ikigai_core::{
     ArgRef, ArgSpec, Description, Endpoint, Error, Invocation, Iri, ReprType, Representation,
     Request, Result, Verb,
 };
-use oxrdf::{NamedNode, NamedOrBlankNode, Term, Triple};
-use oxttl::{NTriplesParser, TurtleSerializer};
+use oxrdf::{Literal, NamedNode, NamedOrBlankNode, Term, Triple};
+use oxttl::{NTriplesParser, NTriplesSerializer, TurtleSerializer};
 
-use crate::{check_name, read_turtle, FILE_PREFIX, FS_READ, SOURCE_PREFIX, XSD_STRING};
+use crate::{
+    check_name, read_turtle, source_scope, FILE_PREFIX, FS_READ, SOURCE_PREFIX, SOURCE_READ,
+    XSD_STRING,
+};
 
 /// The IRI template a corpus's graph list is served at.
 pub const GRAPH_TEMPLATE: &str = "urn:knowledge:graph:corpus:{c}";
@@ -78,10 +83,19 @@ pub const DEFAULT_NODES: usize = 100;
 pub const MAX_NODES: usize = 1000;
 /// The most statements an entity answers.
 pub const ENTITY_STATEMENTS: usize = 1000;
+/// The most statements one hop of a neighborhood asks the store for, per node of budget: a
+/// hop asks for at most this times the budget (10,000 at the largest budget), in a stable
+/// order, so a hub node shortens the walk instead of failing it on the store's own limits.
+pub const HOP_STATEMENTS_PER_NODE: usize = 10;
+/// The predicate an answer that was cut carries, on the answer's own IRI, with the value
+/// `true`: an entity past [`ENTITY_STATEMENTS`], or a neighborhood past its node budget or a
+/// hop's limit. A complete answer carries no such statement.
+pub const TRUNCATED: &str = "https://ikigai-rs.dev/ns/knowledge#truncated";
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const HAS_PART: &str = "http://purl.org/dc/terms/hasPart";
 const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
+const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 const TURTLE: &str = "text/turtle";
 const NTRIPLES: &str = "application/n-triples";
 const TEXT: &str = "text/plain";
@@ -144,6 +158,11 @@ async fn readable_graphs(inv: &Invocation<'_>, corpus: &str) -> Result<Vec<Strin
     }
     let mut declared = BTreeSet::new();
     for name in &sources {
+        // A source the caller may not read contributes nothing, exactly as an undeclared
+        // one: its declaration is never read.
+        if !inv.capability.allows(&source_scope(name)) {
+            continue;
+        }
         let file = crate::source_file(name)?;
         let base = format!("{SOURCE_PREFIX}{name}");
         let what = format!("source `{name}` (a part of the corpus `{corpus}`)");
@@ -261,16 +280,29 @@ fn graph_face(inv: &Invocation<'_>, what: &str) -> Result<&'static str> {
     }
 }
 
+/// The statement that says the answer at `inv`'s IRI was cut.
+fn truncated(inv: &Invocation<'_>) -> Result<Triple> {
+    let answer = NamedNode::new(inv.request.target.as_str())
+        .map_err(|e| Error::Endpoint(format!("the answer's IRI: {e}")))?;
+    Ok(Triple::new(
+        answer,
+        NamedNode::new_unchecked(TRUNCATED),
+        Literal::new_typed_literal("true", NamedNode::new_unchecked(XSD_BOOLEAN)),
+    ))
+}
+
 /// The triples in a stable order, written in `media`.
 fn write_graph(mut triples: Vec<Triple>, media: &'static str) -> Result<Representation> {
     triples.sort_by_key(|t| t.to_string());
     triples.dedup();
     let bytes = if media == NTRIPLES {
-        triples
-            .iter()
-            .map(|t| format!("{t} .\n"))
-            .collect::<String>()
-            .into_bytes()
+        let mut writer = NTriplesSerializer::new().for_writer(Vec::new());
+        for t in &triples {
+            writer
+                .serialize_triple(t)
+                .map_err(|e| Error::Endpoint(format!("writing N-Triples: {e}")))?;
+        }
+        writer.finish()
     } else {
         let failed = |e: std::io::Error| Error::Endpoint(format!("writing Turtle: {e}"));
         let mut writer = TurtleSerializer::new().for_writer(Vec::new());
@@ -325,6 +357,7 @@ impl Endpoint for GraphEndpoint {
             .verb(Verb::Source)
             .verb(Verb::Meta)
             .requires(CORPUS_READ)
+            .requires(SOURCE_READ)
             .requires(FS_READ)
             .requires(STORE_GRAPH_READ)
             .input(
@@ -353,12 +386,21 @@ impl Endpoint for EntityEndpoint {
         // `{e}` is a NamedNode, which refuses every character that could close the IRI, so
         // its N-Triples form is a term and never syntax.
         let query = format!(
-            "CONSTRUCT {{ ?s ?p ?o }} WHERE {{ \
+            "CONSTRUCT {{ ?s ?p ?o }} WHERE {{ SELECT DISTINCT ?s ?p ?o WHERE {{ \
                {entity} (<{OWL_SAME_AS}>|^<{OWL_SAME_AS}>)* ?x . \
                {{ ?x ?p ?o BIND(?x AS ?s) }} UNION {{ ?s ?p ?x BIND(?x AS ?o) }} \
-             }} LIMIT {ENTITY_STATEMENTS}"
+             }} ORDER BY ?s ?p ?o LIMIT {} }}",
+            ENTITY_STATEMENTS + 1
         );
-        write_graph(construct(inv, &graphs, &query).await?, media)
+        // One more than the limit is asked for, so a cut is known, never guessed.
+        // DISTINCT makes the count exact; the sort makes which one falls lexical.
+        let mut triples = construct(inv, &graphs, &query).await?;
+        triples.sort_by_key(|t| t.to_string());
+        if triples.len() > ENTITY_STATEMENTS {
+            triples.truncate(ENTITY_STATEMENTS);
+            triples.push(truncated(inv)?);
+        }
+        write_graph(triples, media)
     }
 
     fn describe(&self) -> Description {
@@ -368,13 +410,15 @@ impl Endpoint for EntityEndpoint {
                 "Every statement about an entity, or naming it, in the corpus's graphs you may \
                  read, closed over owl:sameAs: a SPARQL CONSTRUCT through ikigai-store's \
                  urn:iki:store:graph-construct. {e} is the entity's IRI. At most 1000 \
-                 statements. Takes urn:cap:knowledge:read:corpus:name:{corpus}; a graph you \
-                 hold no urn:cap:store:read:graph:<iri> for is never read. text/turtle by \
+                 statements, in a stable order; an answer that was cut says so, with \
+                 knowledge:truncated true on its own IRI. Takes \
+                 urn:cap:knowledge:read:corpus:name:{corpus}; a graph you hold no urn:cap:store:read:graph:<iri> for is never read. text/turtle by \
                  default, as=application/n-triples.",
             )
             .verb(Verb::Source)
             .verb(Verb::Meta)
             .requires(CORPUS_READ)
+            .requires(SOURCE_READ)
             .requires(FS_READ)
             .requires(STORE_GRAPH_READ)
             .input(
@@ -405,7 +449,10 @@ impl Endpoint for NeighborhoodEndpoint {
         if graphs.is_empty() {
             return write_graph(Vec::new(), media);
         }
-        let triples = walk(inv, &graphs, entity, depth, budget).await?;
+        let (mut triples, cut) = walk(inv, &graphs, entity, depth, budget).await?;
+        if cut {
+            triples.push(truncated(inv)?);
+        }
         write_graph(triples, media)
     }
 
@@ -417,7 +464,9 @@ impl Endpoint for NeighborhoodEndpoint {
                  corpus's graphs you may read: a breadth-first walk of SPARQL CONSTRUCTs \
                  through ikigai-store's urn:iki:store:graph-construct. {n} is 1 to 3. The \
                  walk stops at a node budget (nodes=, 1 to 1000, default 100), keeping the \
-                 statements of each hop in lexical order until the budget is spent. Takes \
+                 statements of each hop in lexical order until the budget is spent; each \
+                 hop asks for at most 10 statements per node of budget. An answer that was \
+                 cut says so, with knowledge:truncated true on its own IRI. Takes \
                  urn:cap:knowledge:read:corpus:name:{corpus}; a graph you hold no \
                  urn:cap:store:read:graph:<iri> for is never read. text/turtle by default, \
                  as=application/n-triples.",
@@ -425,6 +474,7 @@ impl Endpoint for NeighborhoodEndpoint {
             .verb(Verb::Source)
             .verb(Verb::Meta)
             .requires(CORPUS_READ)
+            .requires(SOURCE_READ)
             .requires(FS_READ)
             .requires(STORE_GRAPH_READ)
             .input(
@@ -483,15 +533,19 @@ fn nodes_arg(inv: &Invocation<'_>) -> Result<usize> {
         })
 }
 
-/// The breadth-first walk: each hop is one CONSTRUCT over the frontier, and a statement is
-/// kept only while the nodes it brings in fit the budget.
+/// The breadth-first walk: each hop is one CONSTRUCT over the frontier, at most
+/// [`HOP_STATEMENTS_PER_NODE`] times the budget statements in a stable order, and a statement
+/// is kept only while the nodes it brings in fit the budget. Answers the statements kept, and
+/// whether anything was cut.
 async fn walk(
     inv: &Invocation<'_>,
     graphs: &[String],
     entity: NamedNode,
     depth: u32,
     budget: usize,
-) -> Result<Vec<Triple>> {
+) -> Result<(Vec<Triple>, bool)> {
+    let hop_limit = budget * HOP_STATEMENTS_PER_NODE;
+    let mut cut = false;
     let mut nodes: BTreeSet<NamedNode> = BTreeSet::from([entity.clone()]);
     let mut frontier = vec![entity];
     let mut kept: BTreeMap<String, Triple> = BTreeMap::new();
@@ -501,13 +555,20 @@ async fn walk(
         }
         let values: String = frontier.iter().map(|n| format!("{n} ")).collect();
         let query = format!(
-            "CONSTRUCT {{ ?s ?p ?o }} WHERE {{ \
+            "CONSTRUCT {{ ?s ?p ?o }} WHERE {{ SELECT DISTINCT ?s ?p ?o WHERE {{ \
                {{ VALUES ?x {{ {values}}} ?x ?p ?o BIND(?x AS ?s) }} UNION \
                {{ VALUES ?x {{ {values}}} ?s ?p ?x BIND(?x AS ?o) }} \
-             }}"
+             }} ORDER BY ?s ?p ?o LIMIT {} }}",
+            hop_limit + 1
         );
+        // One more than the limit is asked for, so a cut is known, never guessed.
+        // DISTINCT makes the count exact; the sort makes which one falls lexical.
         let mut found = construct(inv, graphs, &query).await?;
         found.sort_by_key(|t| t.to_string());
+        if found.len() > hop_limit {
+            found.truncate(hop_limit);
+            cut = true;
+        }
         let mut next = Vec::new();
         for t in found {
             let mut new: Vec<NamedNode> = Vec::new();
@@ -525,6 +586,7 @@ async fn walk(
                 }
             }
             if nodes.len() + new.len() > budget {
+                cut = true;
                 continue;
             }
             for n in new {
@@ -535,5 +597,5 @@ async fn walk(
         }
         frontier = next;
     }
-    Ok(kept.into_values().collect())
+    Ok((kept.into_values().collect(), cut))
 }
