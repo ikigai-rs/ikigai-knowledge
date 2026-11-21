@@ -109,11 +109,16 @@
 use std::collections::BTreeMap;
 
 mod graph;
+mod trail;
 pub use graph::{
     corpus_file, corpus_scope, CORPUS_PREFIX, CORPUS_READ, CORPUS_READ_PREFIX, DEFAULT_NODES,
     ENTITY_ID, ENTITY_PREFIX, ENTITY_STATEMENTS, ENTITY_TEMPLATE, GRAPH_ID, GRAPH_PREFIX,
     GRAPH_TEMPLATE, MAX_DEPTH, MAX_NODES, NEIGHBORHOOD_ID, NEIGHBORHOOD_PREFIX,
     NEIGHBORHOOD_TEMPLATE, STORE_GRAPH_READ, STORE_GRAPH_READ_PREFIX, TRUNCATED,
+};
+pub use trail::{
+    ABSTAINED, LLM_ASK, MIN_QUOTE, REMOVED_CLAIMS, TRAIL_DEPTH, TRAIL_ENTITIES, TRAIL_ID,
+    TRAIL_PREFIX, TRAIL_TEMPLATE,
 };
 
 use async_trait::async_trait;
@@ -130,7 +135,8 @@ pub const VOCABULARY_NAMESPACE: &str = "https://ikigai-rs.dev/ns/knowledge#";
 
 /// This module's own vocabulary, as Turtle (`src/vocabulary.ttl`): an `owl:Ontology` for
 /// `https://ikigai-rs.dev/ns/knowledge` whose `owl:versionInfo` is the crate version, defining
-/// every term under [`VOCABULARY_NAMESPACE`] the module emits (today [`TRUNCATED`]). Published
+/// every term under [`VOCABULARY_NAMESPACE`] the module emits ([`TRUNCATED`], [`ABSTAINED`]
+/// and [`REMOVED_CLAIMS`]). Published
 /// at that namespace once deployed.
 pub const VOCABULARY: &str = include_str!("vocabulary.ttl");
 
@@ -187,6 +193,10 @@ pub fn space() -> EndpointSpace {
             UriTemplate::parse(NEIGHBORHOOD_TEMPLATE)
                 .expect("NEIGHBORHOOD_TEMPLATE is a valid template"),
             graph::NeighborhoodEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(TRAIL_TEMPLATE).expect("TRAIL_TEMPLATE is a valid template"),
+            trail::TrailEndpoint,
         )
         .named(ikigai_core::space_iri("knowledge"))
 }

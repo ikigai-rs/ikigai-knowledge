@@ -228,3 +228,111 @@ pub fn corpus_reader(scratch: &Scratch, name: &str) -> Capability {
         format!("urn:cap:store:read:graph:{DEFAULT}"),
     ])
 }
+
+// ------------------------------------------------------------------ the decision trail
+
+pub const DECISION: &str = "urn:iki:ledger:default:item:4";
+pub const DECIDED: &str = "urn:iki:ledger:default:comment:4a";
+pub const STILL_OPEN: &str = "urn:iki:ledger:default:comment:4b";
+pub const ALICE: &str = "urn:iki:person:alice";
+pub const ACME_DECISION: &str = "urn:iki:ledger:acme:item:10";
+pub const ACME_COMMENT: &str = "urn:iki:ledger:acme:comment:10a";
+
+/// [`quads`] plus a decision with two comments, and a same-titled item in acme's ledger.
+pub fn trail_quads() -> String {
+    let t = "<http://purl.org/dc/terms/title>";
+    let ty = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>";
+    let l = "https://ikigai-rs.dev/ns/ledger#";
+    let created = "<http://purl.org/dc/terms/created>";
+    let date = |d: &str| format!("\"{d}\"^^<http://www.w3.org/2001/XMLSchema#dateTime>");
+    quads()
+        + &[
+            format!("<{DECISION}> {ty} <{l}Item> <{DEFAULT}> ."),
+            format!("<{DECISION}> {t} \"Adopt oxigraph as the store\" <{DEFAULT}> ."),
+            format!("<{DECISION}> <{l}status> <{l}open> <{DEFAULT}> ."),
+            format!("<{DECIDED}> {ty} <{l}Comment> <{DEFAULT}> ."),
+            format!("<{DECIDED}> <{l}onItem> <{DECISION}> <{DEFAULT}> ."),
+            format!("<{DECIDED}> <{l}author> <{BRIAN}> <{DEFAULT}> ."),
+            format!(
+                "<{DECIDED}> {created} {} <{DEFAULT}> .",
+                date("2026-10-01T09:00:00Z")
+            ),
+            format!(
+                "<{DECIDED}> <{l}body> \"Decided: we adopt oxigraph, since it already backs \
+                 ikigai-store.\" <{DEFAULT}> ."
+            ),
+            format!("<{STILL_OPEN}> {ty} <{l}Comment> <{DEFAULT}> ."),
+            format!("<{STILL_OPEN}> <{l}onItem> <{DECISION}> <{DEFAULT}> ."),
+            format!("<{STILL_OPEN}> <{l}author> <{ALICE}> <{DEFAULT}> ."),
+            format!(
+                "<{STILL_OPEN}> {created} {} <{DEFAULT}> .",
+                date("2026-10-02T09:00:00Z")
+            ),
+            format!(
+                "<{STILL_OPEN}> <{l}body> \"Still open: the migration of old graphs is not \
+                 scheduled.\" <{DEFAULT}> ."
+            ),
+            format!("<{ACME_DECISION}> {t} \"Adopt oxigraph at acme\" <{ACME}> ."),
+            format!("<{ACME_COMMENT}> <{l}onItem> <{ACME_DECISION}> <{ACME}> ."),
+            format!("<{ACME_COMMENT}> <{l}body> \"acme's private budget is 4M\" <{ACME}> ."),
+        ]
+        .join("\n")
+        + "\n"
+}
+
+/// A stand-in for ikigai-llm's `urn:llm:ask`: answers `reply`, and records every prompt it
+/// was given, so a test can see exactly what the model saw.
+pub fn llm_stub(reply: &str) -> (EndpointSpace, Arc<std::sync::Mutex<Vec<String>>>) {
+    use ikigai_core::{Description, FnEndpoint, ReprType};
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = seen.clone();
+    let reply = reply.to_string();
+    let ask = FnEndpoint::new("llm-stub", move |inv| {
+        let prompt = inv.inline_str("prompt")?.to_string();
+        let system = inv.inline_str("system")?.to_string();
+        record
+            .lock()
+            .unwrap()
+            .push(format!("{system}\n---\n{prompt}"));
+        Ok(Representation::new(
+            ReprType::new("text/plain"),
+            reply.clone().into_bytes(),
+        ))
+    })
+    .with_description(
+        Description::new("llm-stub")
+            .title("A model stub")
+            .summary("Answers a fixed draft, as urn:llm:ask would.")
+            .verb(Verb::Source)
+            .output("text/plain"),
+    );
+    let space = EndpointSpace::new().bind(UriTemplate::parse("urn:llm:ask").unwrap(), ask);
+    (space, seen)
+}
+
+/// The kernel a host builds with a store holding [`trail_quads`] and a model.
+pub fn trail_kernel(scratch: &Scratch, llm: EndpointSpace) -> Kernel {
+    let store = ikigai_store::DurableStore::in_memory().expect("an in-memory store");
+    let loader = Kernel::new(Arc::new(ikigai_store::space(store.clone())));
+    issue(
+        &loader,
+        request(
+            Verb::Sink,
+            "urn:iki:store:load",
+            &[
+                ("content", &trail_quads()),
+                ("format", "application/n-quads"),
+            ],
+        ),
+        &Capability::root(),
+    )
+    .expect("seeding the store");
+    drop(loader);
+    let spaces: Vec<Arc<dyn Space>> = vec![
+        Arc::new(ikigai_knowledge::space()),
+        Arc::new(mount(scratch)),
+        Arc::new(ikigai_store::space(store)),
+        Arc::new(llm),
+    ];
+    Kernel::new(Arc::new(Fallback::new(spaces)))
+}

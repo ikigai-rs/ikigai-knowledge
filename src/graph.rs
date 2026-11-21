@@ -128,7 +128,7 @@ pub fn corpus_file(name: &str) -> Result<String> {
 }
 
 /// The named graphs the corpus `corpus` holds that exist and the caller may read, sorted.
-async fn readable_graphs(inv: &Invocation<'_>, corpus: &str) -> Result<Vec<String>> {
+pub(crate) async fn readable_graphs(inv: &Invocation<'_>, corpus: &str) -> Result<Vec<String>> {
     let file = corpus_file(corpus)?;
     // Before anything is read: a caller who may not read this corpus learns nothing about
     // whether it is declared.
@@ -215,12 +215,16 @@ fn parts(triples: &[Triple], base: &str) -> Vec<String> {
         .collect()
 }
 
-fn iri(text: &str) -> Result<Iri> {
+pub(crate) fn iri(text: &str) -> Result<Iri> {
     Iri::parse(text).map_err(|e| Error::Endpoint(format!("{text}: {e}")))
 }
 
 /// A CONSTRUCT over `graphs` through `urn:iki:store:graph-construct`, as triples.
-async fn construct(inv: &Invocation<'_>, graphs: &[String], query: &str) -> Result<Vec<Triple>> {
+pub(crate) async fn construct(
+    inv: &Invocation<'_>,
+    graphs: &[String],
+    query: &str,
+) -> Result<Vec<Triple>> {
     let request = Request::new(Verb::Source, iri("urn:iki:store:graph-construct")?)
         .with_arg("graph", ArgRef::Inline(graphs.join(" ").into_bytes()))
         .with_arg("query", ArgRef::Inline(query.as_bytes().to_vec()))
@@ -233,7 +237,7 @@ async fn construct(inv: &Invocation<'_>, graphs: &[String], query: &str) -> Resu
 }
 
 /// The corpus a request names with `corpus=`.
-fn corpus_arg(inv: &Invocation<'_>) -> Result<String> {
+pub(crate) fn corpus_arg(inv: &Invocation<'_>) -> Result<String> {
     let corpus = inv
         .inline_str("corpus")
         .map_err(|_| Error::MissingArgument("corpus".to_string()))?
@@ -281,7 +285,7 @@ fn graph_face(inv: &Invocation<'_>, what: &str) -> Result<&'static str> {
 }
 
 /// The statement that says the answer at `inv`'s IRI was cut.
-fn truncated(inv: &Invocation<'_>) -> Result<Triple> {
+pub(crate) fn truncated(inv: &Invocation<'_>) -> Result<Triple> {
     let answer = NamedNode::new(inv.request.target.as_str())
         .map_err(|e| Error::Endpoint(format!("the answer's IRI: {e}")))?;
     Ok(Triple::new(
@@ -516,7 +520,7 @@ fn depth_arg(inv: &Invocation<'_>) -> Result<u32> {
         })
 }
 
-fn nodes_arg(inv: &Invocation<'_>) -> Result<usize> {
+pub(crate) fn nodes_arg(inv: &Invocation<'_>) -> Result<usize> {
     let Ok(asked) = inv.inline_str("nodes") else {
         return Ok(DEFAULT_NODES);
     };
@@ -537,7 +541,7 @@ fn nodes_arg(inv: &Invocation<'_>) -> Result<usize> {
 /// [`HOP_STATEMENTS_PER_NODE`] times the budget statements in a stable order, and a statement
 /// is kept only while the nodes it brings in fit the budget. Answers the statements kept, and
 /// whether anything was cut.
-async fn walk(
+pub(crate) async fn walk(
     inv: &Invocation<'_>,
     graphs: &[String],
     entity: NamedNode,

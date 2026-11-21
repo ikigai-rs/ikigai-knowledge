@@ -23,8 +23,9 @@ person's verdict, an entity, a question and its answer. Model output is provisio
 provenanced: it lands in its own graph, carrying the model that wrote it, and becomes accepted
 only by a person's verdict or a stated rule.
 
-**Status: a scaffold.** Four resources exist today: the source declaration, and over the work
-ledger, the first source, a corpus's graphs, an entity and a bounded neighborhood. The map below is the
+**Status: a scaffold.** Five resources exist today: the source declaration, and over the work
+ledger, the first source, a corpus's graphs, an entity, a bounded neighborhood and a decision
+trail, the first cited answer. The map below is the
 contract the rest is built to; each planned row names the ledger item that builds it.
 
 ## Use it today
@@ -119,6 +120,48 @@ source urn:knowledge:neighborhood:entity:urn:iki:ledger:default:item:01m2h5t1z80
   what `urn:iki:store:graphs` already says. A caller with no store graph grant at all is refused
   by the kernel's floor, naming the grant family and no graph.
 
+### A decision trail, the first cited answer
+
+"Who decided X, where, and what is still open", over a structured corpus. The ledger is
+already RDF, so the answer needs no extraction, no drafts and no vector index:
+
+```text
+source urn:knowledge:trail:corpus:work topic=oxigraph
+source urn:knowledge:trail:corpus:work topic=oxigraph as=text/turtle
+```
+
+1. **Link.** The topic is matched, case-insensitively and as a literal, against `dcterms:title`,
+   `rdfs:label` and `skos:prefLabel` in the corpus's graphs the caller may read: one SPARQL
+   CONSTRUCT, the first 5 entities in IRI order.
+2. **Context.** Each linked entity's two-hop neighborhood (an item, its comments and what they
+   name), walked exactly as the neighborhood endpoint walks, under the CALLER's capability, with
+   its node budget (`nodes=`, default 100). A passage is a subject with a title or a body: an
+   item's text is its title and its body joined by a blank line, a comment's is its body.
+3. **Draft.** `urn:llm:ask` (ikigai-llm, which the host binds), given the passages only, fenced
+   as data, and asked for claim blocks: `CLAIM:`, `CITE:` a passage's IRI, `QUOTE:` its exact
+   words.
+4. **Check.** A claim is kept only if it cites a passage of the context and its quote is found
+   verbatim in that passage's text (at least 8 characters, or the whole passage). Every other
+   claim is removed and counted. With none left, or a topic that links to nothing, the answer
+   abstains, and a topic that links to nothing never reaches the model.
+
+- **Faces.** `text/plain` by default: the topic, then each kept claim with its passage, its
+  character range and its quote, then how many claims were removed. `as=text/turtle` is one
+  [Web Annotation](https://www.w3.org/TR/annotation-model/) per claim, `oa:bodyValue` the claim,
+  targeting the passage with an `oa:TextQuoteSelector` and an `oa:TextPositionSelector`
+  (`oa:start` inclusive, `oa:end` exclusive, in characters). The answer's own IRI carries
+  `knowledge:abstained true` when it abstains, `knowledge:removedClaims n` when the check removed
+  any, and `knowledge:truncated true` when a neighborhood was cut.
+- **Authority.** As the neighborhood: `urn:cap:knowledge:read:corpus:name:{c}`, source grants,
+  the files, and the narrow store graph grants. A graph the caller may not read is never in
+  the context, so the model never sees it, and a claim citing it is removed. The model call is
+  the caller's too, so ikigai-llm judges its own network grant.
+- **Caching.** None: a model drafts it, so it is live by decision. The prompt is a constant in
+  the crate until the prompt resources land (ledger #3858).
+- **Errors.** A topic that is empty, longer than 200 characters or on more than one line is
+  `InvalidArgument` naming `topic`; a kernel with nothing at `urn:llm:ask` is `NotFound` saying
+  how a host binds one.
+
 ### Mounting it in a host
 
 The space is configuration-free and names itself `urn:iki:space:knowledge`. This crate opens no
@@ -170,6 +213,7 @@ small pure function, a SPARQL composer or a call to a model.
 | entity | `urn:knowledge:entity:id:{e}` (`corpus=`) | generic composer | SPARQL CONSTRUCT over the corpus's graphs the caller may read, closed over `owl:sameAs` by a property path. Over the work ledger's structured graphs today; accepted drafts and verdicts, and ikigai-reason's closure, are ledger #3858 | **live** (ledger), planned #3858 |
 | graph | `urn:knowledge:graph:corpus:{c}` | list of names | the named graphs of a corpus that exist and the caller may read, for `graph=` sources | **live** |
 | neighborhood | `urn:knowledge:neighborhood:entity:{e}:depth:{n}` (`corpus=`, `nodes=`) | generic composer | a bounded SPARQL CONSTRUCT walk: a depth (1 to 3) and a node budget (default 100, at most 1000) | **live** |
+| decision trail | `urn:knowledge:trail:corpus:{c}` (`topic=`, `nodes=`) | composition | over a structured corpus: label match (SPARQL), the linked entities' neighborhoods, `urn:llm:ask` over their passages, then the citation check; claims as `oa:` annotations with quote and position selectors; abstains when nothing is grounded. The question-addressed `answer` below generalizes it to prose sources | **live** (ledger #3888) |
 | disagreement | `urn:knowledge:disagreement:entity:{e}` | generic composer | SPARQL: functional properties with more than one value, each with its sources and their authority ranks | planned, ledger #3859 |
 | question | `urn:knowledge:question:hash:{h}` | resource | the question text and its corpus, content-addressed | planned, ledger #3859 |
 | link | `urn:knowledge:link:question:{h}` | composition | the entities a question names: label match first (SPARQL), a model's draft only as residual | planned, ledger #3859 |
@@ -232,7 +276,10 @@ down.
 the kernel, parses it with the RDF library (oxttl) and writes each face back with it. The graph
 list, the entity and the neighborhood are SPARQL through ikigai-store's narrow doors; the only
 code beyond the queries is reading the corpus and source files, and the neighborhood's
-breadth-first loop, which keeps the node budget (one CONSTRUCT cannot count nodes as it walks).
+breadth-first loop, which keeps the node budget (one CONSTRUCT cannot count nodes as it walks). The
+decision trail adds the citation check, a small pure function over the draft and the
+passages, and the parsing of the draft's claim blocks; its link is a SPARQL CONSTRUCT and its
+context is the neighborhood's walk.
 
 ## Accessibility
 
