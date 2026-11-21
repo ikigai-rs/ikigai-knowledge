@@ -9,7 +9,8 @@
 //! - `cacheable`: the answer is marked cacheable and hangs from the file's thread, so a cut
 //!   of that thread recomputes it (RECOMPUTE) and nothing else does.
 //! - `enforced_under`: a caller holding the file read and a grant for ANOTHER source is
-//!   refused by the module's own rule, with a typed `Denied`.
+//!   refused by the module's own rule, with a typed `Denied`. The trail's caller also holds a
+//!   `urn:cap:llm:use:` grant, as it declares, so the kernel's floor is not what refuses it.
 //! - `space()` is self-named `urn:iki:space:knowledge`: it takes no parameters and reads
 //!   nothing while it is built.
 
@@ -48,6 +49,18 @@ const STORE: [&str; 16] = [
     "store-load",
     "store-graph-written",
 ];
+
+/// `cap` and one provider's `urn:cap:llm:use:` grant, which ikigai-llm takes at urn:llm:ask.
+fn with_model(cap: ikigai_core::Capability) -> ikigai_core::Capability {
+    let mut scopes: Vec<String> = cap
+        .scopes()
+        .expect("a scoped capability")
+        .iter()
+        .cloned()
+        .collect();
+    scopes.push("urn:cap:llm:use:anthropic".to_string());
+    ikigai_core::Capability::scoped(scopes)
+}
 
 #[test]
 fn conforms() {
@@ -128,7 +141,9 @@ fn conforms() {
         .enforced_under(
             hood(ikigai_knowledge::NEIGHBORHOOD_ID).capability(corpus_reader(&scratch, "another")),
         )
-        .enforced_under(trail().capability(corpus_reader(&scratch, "another")))
+        // The trail also declares urn:cap:llm:use:*, so its probe holds a model grant: the
+        // kernel's floor admits it, and the module's own corpus rule is what refuses it.
+        .enforced_under(trail().capability(with_model(corpus_reader(&scratch, "another"))))
         .enforced_under(
             Fixture::new(ikigai_knowledge::SOURCE_ID, Verb::Source)
                 .binding("name", "example")

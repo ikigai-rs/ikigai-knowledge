@@ -155,7 +155,10 @@ source urn:knowledge:trail:corpus:work topic=oxigraph as=text/turtle
 - **Authority.** As the neighborhood: `urn:cap:knowledge:read:corpus:name:{c}`, source grants,
   the files, and the narrow store graph grants. A graph the caller may not read is never in
   the context, so the model never sees it, and a claim citing it is removed. The model call is
-  the caller's too, so ikigai-llm judges its own network grant.
+  the caller's too, so the trail also declares `urn:cap:llm:use:*`, the family ikigai-llm
+  enforces at `urn:llm:ask`: a caller with no `urn:cap:llm:use:<provider>` is `Denied` before
+  any model call, and `urn:kernel:actions` does not offer it the trail. ikigai-llm still judges
+  which provider and its own network grant.
 - **Caching.** None: a model drafts it, so it is live by decision. The prompt is a constant in
   the crate until the prompt resources land (ledger #3858).
 - **Errors.** A topic that is empty, longer than 200 characters or on more than one line is

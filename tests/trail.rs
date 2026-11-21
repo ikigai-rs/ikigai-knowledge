@@ -9,10 +9,12 @@ mod common;
 
 use common::*;
 use ikigai_core::{Capability, Error, Kernel, Verb};
-use ikigai_knowledge::{corpus_scope, source_scope, TRAIL_PREFIX};
+use ikigai_knowledge::{corpus_scope, source_scope, TRAIL_PREFIX, TRAIL_TEMPLATE};
 use ikigai_store::cap_read_graph;
 
 const ABSTAINED: &str = "<https://ikigai-rs.dev/ns/knowledge#abstained>";
+/// The grant ikigai-llm takes at `urn:llm:ask`, for one provider.
+const LLM_GRANT: &str = "urn:cap:llm:use:anthropic";
 const REMOVED: &str = "<https://ikigai-rs.dev/ns/knowledge#removedClaims>";
 
 fn setup(
@@ -36,6 +38,7 @@ fn grants(scratch: &Scratch, graphs: &[&str]) -> Capability {
         corpus_scope("work"),
         source_scope("ledger"),
         format!("urn:cap:fs:read:{}", scratch.knowledge().display()),
+        LLM_GRANT.to_string(),
     ];
     scopes.extend(graphs.iter().map(|g| cap_read_graph(g)));
     Capability::scoped(scopes)
@@ -240,6 +243,7 @@ fn a_caller_without_the_corpus_grant_is_denied() {
         source_scope("ledger"),
         format!("urn:cap:fs:read:{}", s.knowledge().display()),
         cap_read_graph(DEFAULT),
+        LLM_GRANT.to_string(),
     ]);
     let err = trail(&kernel, "oxigraph", None, &cap).unwrap_err();
     assert!(matches!(err, Error::Denied(_)), "{err:?}");
@@ -267,5 +271,55 @@ fn a_kernel_with_no_model_says_how_to_bind_one() {
     assert!(
         matches!(err, Error::NotFound(ref why) if why.contains("urn:llm:ask") && why.contains("ikigai-llm")),
         "{err:?}"
+    );
+}
+
+/// What `urn:kernel:actions` offers a capability, one endpoint template per line.
+fn offered(kernel: &Kernel, cap: &Capability) -> Vec<String> {
+    let got = issue(
+        kernel,
+        request(Verb::Source, "urn:kernel:actions", &[]),
+        cap,
+    )
+    .map(|r| text(&r))
+    .unwrap();
+    got.lines().map(str::to_string).collect()
+}
+
+#[test]
+fn the_trail_declares_the_model_grant_it_issues_under() {
+    let (s, kernel, _) = setup("trail-declares", &mixed_draft());
+    // The family form is satisfied by any one provider's grant: offered with it.
+    let offer = offered(&kernel, &grants(&s, &[DEFAULT]));
+    assert!(offer.iter().any(|l| l == TRAIL_TEMPLATE), "{offer:?}");
+}
+
+#[test]
+fn a_caller_without_a_model_grant_is_denied_before_any_model_call_and_not_offered_the_trail() {
+    let (s, kernel, seen) = setup("trail-nollm-grant", &mixed_draft());
+    let cap = Capability::scoped([
+        corpus_scope("work"),
+        source_scope("ledger"),
+        format!("urn:cap:fs:read:{}", s.knowledge().display()),
+        cap_read_graph(DEFAULT),
+    ]);
+    let err = trail(&kernel, "oxigraph", None, &cap).unwrap_err();
+    assert!(
+        matches!(err, Error::Denied(ref why) if why.contains("urn:cap:llm:use:")),
+        "{err:?}"
+    );
+    assert!(seen.lock().unwrap().is_empty(), "the model was never asked");
+    // Not even the abstaining paths run: a topic that links to nothing is denied the same.
+    let err = trail(&kernel, "kubernetes", None, &cap).unwrap_err();
+    assert!(matches!(err, Error::Denied(_)), "{err:?}");
+    // And the manifold does not offer the trail to that capability.
+    // Paired: the same capability is still offered the neighborhood, which asks no model.
+    let offer = offered(&kernel, &cap);
+    assert!(!offer.iter().any(|l| l == TRAIL_TEMPLATE), "{offer:?}");
+    assert!(
+        offer
+            .iter()
+            .any(|l| l.starts_with("urn:knowledge:neighborhood:")),
+        "{offer:?}"
     );
 }

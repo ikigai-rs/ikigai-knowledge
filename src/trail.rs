@@ -39,6 +39,10 @@ pub const TRAIL_PREFIX: &str = "urn:knowledge:trail:corpus:";
 pub const TRAIL_ID: &str = "knowledge-trail";
 /// The model door the draft is asked of: ikigai-llm's facade, bound by the host.
 pub const LLM_ASK: &str = "urn:llm:ask";
+/// What [`LLM_ASK`] demands of the capability it is issued under: ikigai-llm takes
+/// `urn:cap:llm:use:<provider>`, declared there as this family form. The draft is issued
+/// under the CALLER's capability, so the trail declares it too: declared = enforced.
+pub const LLM_USE: &str = "urn:cap:llm:use:*";
 /// The most entities a topic links to.
 pub const TRAIL_ENTITIES: usize = 5;
 /// How many hops of each linked entity the context holds: the item, its comments, and what
@@ -162,7 +166,8 @@ impl Endpoint for TrailEndpoint {
                  a passage and quote it exactly or it is removed; with none left the answer \
                  abstains. text/plain by default, as=text/turtle for Web Annotations with \
                  quote and position selectors. Takes urn:cap:knowledge:read:corpus:name:{c}; \
-                 a graph you hold no urn:cap:store:read:graph:<iri> for is never read.",
+                 a graph you hold no urn:cap:store:read:graph:<iri> for is never read, and the \
+                 draft is asked under your urn:cap:llm:use:<provider>.",
             )
             .verb(Verb::Source)
             .verb(Verb::Meta)
@@ -170,6 +175,7 @@ impl Endpoint for TrailEndpoint {
             .requires(SOURCE_READ)
             .requires(FS_READ)
             .requires(STORE_GRAPH_READ)
+            .requires(LLM_USE)
             .input(
                 ArgSpec::new("c")
                     .summary("the corpus's name: the file knowledge/corpus/{c}.ttl")
