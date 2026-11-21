@@ -117,10 +117,12 @@ rather than inventing one.
 
 ### ikigai-vector (a separate module, pluggable)
 
-Vector search is its own module, with backends behind one contract. Its design is ledger #3855.
+Vector search is its own module, with backends behind one contract. Its design is ledger #3855,
+written up in [docs/vector-design.md](docs/vector-design.md).
 
 | Set | Name | Kind | How | Status |
 |---|---|---|---|---|
+| index declaration | `urn:vector:declaration:index:{n}` | **ATOM** (config) | a Turtle file in the config home: the index's backend (`flat` first), its embedding model and its dimensions; sealed from models | planned, ledger #3855 |
 | index | `urn:vector:index:name:{n}` | **ATOM** (a materialized cache) | the vectors of a set of passages, held by a backend chosen by configuration (an in-process index first; an external service mounted later): one contract, backends behind it. Rebuildable from its inputs at any time | planned, ledger #3855 |
 | embedding | `urn:vector:embedding:model:{m}:hash:{h}` | composition | an embedding call through ikigai-llm; pure, cacheable by text hash and model | planned, ledger #3855 |
 | member | `urn:vector:member:index:{n}:passage:{p}` | Sink edge | added when a passage appears, removed when its thread is cut | planned, ledger #3855 |
