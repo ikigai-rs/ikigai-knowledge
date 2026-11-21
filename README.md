@@ -102,6 +102,11 @@ source urn:knowledge:neighborhood:entity:urn:iki:ledger:default:item:01m2h5t1z80
   budget or a hop's limit, carries one more statement on the answer's own IRI,
   `<{answer}> <https://ikigai-rs.dev/ns/knowledge#truncated> true`. A complete answer carries
   none.
+- **Vocabulary.** `knowledge:truncated` is defined in the module's own vocabulary,
+  [`src/vocabulary.ttl`](src/vocabulary.ttl) (the `VOCABULARY` constant): an `owl:Ontology` for
+  `https://ikigai-rs.dev/ns/knowledge` whose `owl:versionInfo` is the crate version. A test
+  holds every term under that namespace the crate names to a definition there. The vocabulary is
+  published at its namespace once deployed.
 - **Faces.** The graph list is `text/plain`; an entity and a neighborhood are `text/turtle` by
   default, `as=application/n-triples` for one statement per line.
 - **Authority.** All three take `urn:cap:knowledge:read:corpus:name:{c}`, read a source's graphs

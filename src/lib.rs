@@ -113,7 +113,7 @@ pub use graph::{
     corpus_file, corpus_scope, CORPUS_PREFIX, CORPUS_READ, CORPUS_READ_PREFIX, DEFAULT_NODES,
     ENTITY_ID, ENTITY_PREFIX, ENTITY_STATEMENTS, ENTITY_TEMPLATE, GRAPH_ID, GRAPH_PREFIX,
     GRAPH_TEMPLATE, MAX_DEPTH, MAX_NODES, NEIGHBORHOOD_ID, NEIGHBORHOOD_PREFIX,
-    NEIGHBORHOOD_TEMPLATE, STORE_GRAPH_READ, STORE_GRAPH_READ_PREFIX,
+    NEIGHBORHOOD_TEMPLATE, STORE_GRAPH_READ, STORE_GRAPH_READ_PREFIX, TRUNCATED,
 };
 
 use async_trait::async_trait;
@@ -123,6 +123,16 @@ use ikigai_core::{
 };
 use oxrdf::{NamedOrBlankNode, Term, Triple};
 use oxttl::{TurtleParser, TurtleSerializer};
+
+/// The namespace of this module's own vocabulary, [`VOCABULARY`]: its terms are
+/// `https://ikigai-rs.dev/ns/knowledge#{term}`, and the ontology's IRI is this without the `#`.
+pub const VOCABULARY_NAMESPACE: &str = "https://ikigai-rs.dev/ns/knowledge#";
+
+/// This module's own vocabulary, as Turtle (`src/vocabulary.ttl`): an `owl:Ontology` for
+/// `https://ikigai-rs.dev/ns/knowledge` whose `owl:versionInfo` is the crate version, defining
+/// every term under [`VOCABULARY_NAMESPACE`] the module emits (today [`TRUNCATED`]). Published
+/// at that namespace once deployed.
+pub const VOCABULARY: &str = include_str!("vocabulary.ttl");
 
 /// The name [`space`] claims: `urn:iki:space:knowledge`.
 pub const SPACE_ID: &str = "urn:iki:space:knowledge";
