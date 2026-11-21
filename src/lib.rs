@@ -109,12 +109,18 @@
 use std::collections::BTreeMap;
 
 mod graph;
+mod passage;
 mod trail;
 pub use graph::{
     corpus_file, corpus_scope, CORPUS_PREFIX, CORPUS_READ, CORPUS_READ_PREFIX, DEFAULT_NODES,
     ENTITY_ID, ENTITY_PREFIX, ENTITY_STATEMENTS, ENTITY_TEMPLATE, GRAPH_ID, GRAPH_PREFIX,
     GRAPH_TEMPLATE, MAX_DEPTH, MAX_NODES, NEIGHBORHOOD_ID, NEIGHBORHOOD_PREFIX,
     NEIGHBORHOOD_TEMPLATE, STORE_GRAPH_READ, STORE_GRAPH_READ_PREFIX, TRUNCATED,
+};
+pub use passage::{
+    chunk, chunking_scope, passage_iri, CHUNKING_ID, CHUNKING_PREFIX, CHUNKING_READ,
+    CHUNKING_READ_PREFIX, CHUNKING_TEMPLATE, CHUNK_ID, CHUNK_PREFIX, CHUNK_TEMPLATE,
+    MAX_CHARACTERS, MAX_PASSAGE, PASSAGE_ID, PASSAGE_PREFIX, PASSAGE_TEMPLATE,
 };
 pub use trail::{
     ABSTAINED, LLM_ASK, LLM_USE, MIN_QUOTE, REMOVED_CLAIMS, TRAIL_DEPTH, TRAIL_ENTITIES, TRAIL_ID,
@@ -198,6 +204,18 @@ pub fn space() -> EndpointSpace {
             UriTemplate::parse(TRAIL_TEMPLATE).expect("TRAIL_TEMPLATE is a valid template"),
             trail::TrailEndpoint,
         )
+        .bind(
+            UriTemplate::parse(CHUNKING_TEMPLATE).expect("CHUNKING_TEMPLATE is a valid template"),
+            passage::ChunkingEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(CHUNK_TEMPLATE).expect("CHUNK_TEMPLATE is a valid template"),
+            passage::ChunkEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(PASSAGE_TEMPLATE).expect("PASSAGE_TEMPLATE is a valid template"),
+            passage::PassageEndpoint,
+        )
         .named(ikigai_core::space_iri("knowledge"))
 }
 
@@ -241,10 +259,10 @@ pub(crate) fn check_name(arg: &str, name: &str) -> Result<()> {
     if ok {
         Ok(())
     } else {
-        let (kind, dir) = if arg == "name" {
-            ("source", "source")
-        } else {
-            ("corpus", "corpus")
+        let (kind, dir) = match arg {
+            "name" => ("source", "source"),
+            "chunking" => ("chunking rule", "chunking"),
+            _ => ("corpus", "corpus"),
         };
         Err(Error::InvalidArgument {
             name: arg.to_string(),

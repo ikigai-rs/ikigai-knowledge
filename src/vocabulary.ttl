@@ -28,3 +28,9 @@ knowledge:removedClaims a rdf:Property ;
     rdfs:label "removed claims"@en ;
     rdfs:comment "On a decision trail answer's own IRI: how many of the model's claims the citation check removed, because each cited no passage of the context or did not quote it exactly. Present only when one was removed."@en ;
     rdfs:range xsd:integer .
+
+knowledge:maxCharacters a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "maximum characters"@en ;
+    rdfs:comment "On a chunking rule: the most characters one passage spans. Paragraphs are packed into a passage while it spans at most this many; a longer paragraph is cut into pieces of this many."@en ;
+    rdfs:range xsd:positiveInteger .
