@@ -46,6 +46,20 @@ words, the tests pin those lines exactly, and this file says what has not been t
   (`NotFound` naming the file it looked for), no file mount (`NotFound` saying how a host binds
   one), a source the caller may not read (`Denied` naming the scope it takes), and a malformed
   declaration or one with a blank node (refused naming the file).
+- **The corpus graph list** (`urn:knowledge:graph:corpus:{c}`, `text/plain`): sorted IRIs, one
+  per line, no angle brackets, and an empty body when the caller may read none.
+- **The entity and neighborhood faces** (`urn:knowledge:entity:id:{e}`,
+  `urn:knowledge:neighborhood:entity:{e}:depth:{n}`): Turtle by default and N-Triples with
+  `as=application/n-triples`, one statement per line in lexical order, for programs; people read
+  them in an editor or through a client. An empty answer is an empty body.
+- **Their refusals**: an entity that is not an absolute IRI (`InvalidArgument` naming `e`), a
+  depth outside 1 to 3 (`InvalidArgument` naming `n`), a node budget outside 1 to 1000
+  (`InvalidArgument` naming `nodes`), a face that does not exist (`InvalidArgument` naming `as`
+  and both faces), a corpus name that is not one path segment (`InvalidArgument` naming
+  `corpus`), a corpus the caller may not read (`Denied` naming the scope it takes), a corpus or
+  source not declared (`NotFound` naming the file it looked for), a corpus part that is not a
+  source (refused naming the file), and no store in the kernel (`NotFound` saying how a host
+  binds one).
 - **Self-description**: the endpoint's title, summary and argument summary, which a catalog, an
   MCP tool list or a person reading Meta sees.
 
@@ -86,6 +100,7 @@ The tests run on every pull request in CI and gate merge.
 | The text face's exact lines | Pass | `tests/source.rs` `a_declared_source_answers_in_the_text_face_by_default` and the crate-level doctest in `src/lib.rs`; `cargo test`, rustc 1.100.0 | the header, the subject order, the indent, the terms | how a client shows the lines |
 | No terminal control sequences in the text face | Pass | `tests/source.rs` `the_text_face_is_plain_lines_with_no_terminal_control_sequences`; `cargo test`, rustc 1.100.0 | an ANSI color sequence and a line break inside a literal are escaped; every character is printable but the line ends | C1 controls and direction marks (see Known limitations) |
 | Refusal sentences name their subject | Pass | `tests/source.rs`: `an_undeclared_source_is_not_found_naming_where_it_looked`, `a_kernel_with_no_file_mount_serves_no_source_and_says_why`, `a_caller_without_the_source_grant_is_denied`, `a_malformed_declaration_is_refused_naming_the_file`, `a_blank_node_is_refused`, `a_name_that_is_not_one_path_segment_is_an_invalid_argument`, `an_unknown_face_is_an_invalid_argument_naming_both_faces`; `cargo test`, rustc 1.100.0 | each refusal's kind and the words it must contain | whether the sentence is clear when heard |
+| The corpus endpoints' faces and refusal kinds | Pass | `tests/ledger.rs` (10 tests): the graph list's exact lines, the entity and neighborhood statements, the empty body a caller without a ledger's grant gets, and the kind and argument of the `e`, `n` and `nodes` refusals; `cargo test` | the graph list's lines, which statements each face holds, the refusal kind and the argument it names | the sentences of the `as`, `corpus`, undeclared-corpus and no-store refusals, which no test pins yet; how a client shows Turtle |
 | Self-description is well formed | Pass | `tests/conformance.rs`, ikigai-conformance 0.14.0 (ARGSPECS, VALIDATE, OUTPUTS among its checks) | a title, a summary, every argument described and typed | whether the summary is clear when heard |
 | Automated WCAG checker (for example axe) | Blocked | this crate emits no HTML, so there is no page here to run one on | | |
 | Screen reader reading the text face and the refusals | Blocked | no screen reader has been used on this output | | |
@@ -179,6 +194,7 @@ and before any conformance claim.
 | Date | Change | Evidence |
 |---|---|---|
 | 2026-11-20 | First version: the source declaration's faces and refusals | the scaffold pull request |
+| 2026-11-20 | The corpus graph list, the entity and the neighborhood: their faces and refusals (ledger #3856) | `tests/ledger.rs` and the conformance walk over four endpoints |
 
 ## References
 

@@ -23,7 +23,8 @@ person's verdict, an entity, a question and its answer. Model output is provisio
 provenanced: it lands in its own graph, carrying the model that wrote it, and becomes accepted
 only by a person's verdict or a stated rule.
 
-**Status: a scaffold.** One resource exists today, the source declaration. The map below is the
+**Status: a scaffold.** Four resources exist today: the source declaration, and over the work
+ledger, the first source, a corpus's graphs, an entity and a bounded neighborhood. The map below is the
 contract the rest is built to; each planned row names the ledger item that builds it.
 
 ## Use it today
@@ -61,6 +62,49 @@ source urn:knowledge:source:name:ledger as=text/turtle
 - **Caching.** The answer is cached under the file's golden thread, so editing the file through
   the kernel, or a watcher over the mount, refreshes it.
 
+### The work ledger, the first source
+
+The ledger's items, links, comments and labels are already RDF in ikigai-store, one named graph
+per ledger (`urn:iki:ledger:graph:{name}`), so its lift is the identity and its entities (items,
+people, repositories) are the IRIs it already uses. Declare it, and a corpus holding it:
+
+```turtle
+# <config home>/knowledge/source/ledger.ttl
+@prefix dcterms: <http://purl.org/dc/terms/> .
+<> dcterms:title "The work ledger" ;
+   dcterms:hasPart <urn:iki:ledger:graph:default> .
+
+# <config home>/knowledge/corpus/work.ttl
+@prefix dcterms: <http://purl.org/dc/terms/> .
+<> dcterms:title "Our repositories, docs and ledger" ;
+   dcterms:hasPart <urn:knowledge:source:name:ledger> .
+```
+
+```text
+source urn:knowledge:graph:corpus:work
+source urn:knowledge:entity:id:urn:iki:ledger:default:item:01m2h5t1z80m3b2f corpus=work
+source urn:knowledge:neighborhood:entity:urn:iki:ledger:default:item:01m2h5t1z80m3b2f:depth:2 corpus=work nodes=50
+```
+
+- **Graphs.** `urn:knowledge:graph:corpus:{c}` lists the corpus's named graphs that exist and
+  that the caller may read: sorted IRIs, one per line, empty when there are none.
+- **Entity.** Every statement about `{e}`, or naming it, in those graphs, closed over
+  `owl:sameAs`: one SPARQL CONSTRUCT through `urn:iki:store:graph-construct`, at most 1000
+  statements.
+- **Neighborhood.** The statements within `{n}` hops (1 to 3) of `{e}`, in either direction: a
+  breadth-first walk of CONSTRUCTs that stops at a node budget (`nodes=`, 1 to 1000, default
+  100), keeping each hop's statements in lexical order until the budget is spent, so the cut is
+  deterministic. A class (the object of `rdf:type`) is not a neighbor.
+- **Faces.** The graph list is `text/plain`; an entity and a neighborhood are `text/turtle` by
+  default, `as=application/n-triples` for one statement per line.
+- **Authority.** All three take `urn:cap:knowledge:read:corpus:name:{c}`, read the corpus and
+  source files through the kernel (so a `urn:cap:fs:read:` grant with `ikigai-fs`), and read the
+  store only under the NARROW grants, `urn:cap:store:read:graph:<iri>`. A graph the caller holds
+  no grant for is never named to the store: it is absent from every answer exactly as an
+  undeclared graph is, so a caller learns nothing about a ledger it holds no token for beyond
+  what `urn:iki:store:graphs` already says. A caller with no store graph grant at all is refused
+  by the kernel's floor, naming the grant family and no graph.
+
 ### Mounting it in a host
 
 The space is configuration-free and names itself `urn:iki:space:knowledge`. This crate opens no
@@ -75,7 +119,13 @@ let mount = EndpointSpace::new().bind(
     UriTemplate::parse(ikigai_knowledge::FILE_TEMPLATE)?,
     ikigai_fs::FileEndpoint::new(config_home.join("knowledge")).cacheable(),
 );
-let spaces: Vec<Arc<dyn Space>> = vec![Arc::new(ikigai_knowledge::space()), Arc::new(mount)];
+let spaces: Vec<Arc<dyn Space>> = vec![
+    Arc::new(ikigai_knowledge::space()),
+    Arc::new(mount),
+    // The corpus endpoints read the ledger's graphs through the store, by IRI: `store` is
+    // the `ikigai_store::DurableStore` the host opened once.
+    Arc::new(ikigai_store::space(store.clone())),
+];
 let kernel = Kernel::new(Arc::new(Fallback::new(spaces)));
 ```
 
@@ -92,7 +142,7 @@ small pure function, a SPARQL composer or a call to a model.
 | Set | Name | Kind | How | Status |
 |---|---|---|---|---|
 | source declaration | `urn:knowledge:source:name:{s}` | **ATOM** (config) | a Turtle file in the config home: which resources to ingest, their lift, their authority rank, the corpus they belong to | **live** |
-| corpus | `urn:knowledge:corpus:name:{c}` | list of names | the sources a corpus holds; a corpus is also a corridor (below) | planned, ledger #3856 |
+| corpus | `urn:knowledge:corpus:name:{c}` | list of names | the sources a corpus holds; a corpus is also a corridor (below). Today a Turtle file in the config home, `knowledge/corpus/{c}.ttl`, read by the graph list; not served at its own name yet | planned, ledger #3856 |
 | document | `urn:knowledge:document:source:{s}:id:{d}` | alias rule | onto the underlying resource: `urn:file:…`, `urn:iki:ledger:item:N`, `urn:repo:{repo}:file:…` | planned, ledger #3856, #3857 |
 | lift | `urn:knowledge:lift:document:{d}` | transreption | the document's structure as RDF: ikigai-markdown's generic lift plus a mapping resource; the ledger's own Turtle as is; HTML through ikigai-html; PDF and slides by a text transreptor that keeps page and offsets; a database by an R2RML/RML mapping resource | planned, ledger #3856, #3857, #3860, #3861 |
 | passage | `urn:knowledge:passage:document:{d}:range:{start}-{end}` | tiny pure function | a slice of the lift's text; the chunking rule is a resource (`urn:knowledge:chunking:name:{n}`) | planned, ledger #3857 |
@@ -100,9 +150,9 @@ small pure function, a SPARQL composer or a call to a model.
 | ontology | `urn:knowledge:ontology:name:{n}` | resource | SHACL shapes the extracted entities and relations must satisfy | planned, ledger #3858 |
 | draft | `urn:knowledge:draft:passage:{p}:model:{m}` | composition | `urn:llm:ask` over passage and prompt; the result SHACL-checked against the ontology; stored as `oa:` annotations with provenance; cacheable by input | planned, ledger #3858 |
 | verdict | `urn:knowledge:verdict:draft:{x}` | **ATOM** | a person's accept, reject, correction or `sameAs`, through ikigai-judge's correction loop; sealed from models | planned, ledger #3858 |
-| entity | `urn:knowledge:entity:id:{e}` | generic composer | SPARQL CONSTRUCT over accepted drafts, verdicts and the structured lifts, closed over `owl:sameAs` by ikigai-reason | planned, ledger #3856, #3858 |
-| graph | `urn:knowledge:graph:corpus:{c}` | list of names | the named graphs of a corpus, for `graph=` sources | planned, ledger #3856 |
-| neighborhood | `urn:knowledge:neighborhood:entity:{e}:depth:{n}` | generic composer | a bounded SPARQL CONSTRUCT: a depth and a node budget | planned, ledger #3856 |
+| entity | `urn:knowledge:entity:id:{e}` (`corpus=`) | generic composer | SPARQL CONSTRUCT over the corpus's graphs the caller may read, closed over `owl:sameAs` by a property path. Over the work ledger's structured graphs today; accepted drafts and verdicts, and ikigai-reason's closure, are ledger #3858 | **live** (ledger), planned #3858 |
+| graph | `urn:knowledge:graph:corpus:{c}` | list of names | the named graphs of a corpus that exist and the caller may read, for `graph=` sources | **live** |
+| neighborhood | `urn:knowledge:neighborhood:entity:{e}:depth:{n}` (`corpus=`, `nodes=`) | generic composer | a bounded SPARQL CONSTRUCT walk: a depth (1 to 3) and a node budget (default 100, at most 1000) | **live** |
 | disagreement | `urn:knowledge:disagreement:entity:{e}` | generic composer | SPARQL: functional properties with more than one value, each with its sources and their authority ranks | planned, ledger #3859 |
 | question | `urn:knowledge:question:hash:{h}` | resource | the question text and its corpus, content-addressed | planned, ledger #3859 |
 | link | `urn:knowledge:link:question:{h}` | composition | the entities a question names: label match first (SPARQL), a model's draft only as residual | planned, ledger #3859 |
@@ -161,9 +211,11 @@ Everything else is SPARQL, templates, `urn:llm:ask` and lists of names. If the a
 wants Rust, an s-expression program is tried first, and the reason it fell short is written
 down.
 
-**As built today:** the source declaration is the one atom, and the only code. Its endpoint reads
-the file through the kernel, parses it with the RDF library (oxttl) and writes each face back
-with it.
+**As built today:** the source declaration is the one atom. Its endpoint reads the file through
+the kernel, parses it with the RDF library (oxttl) and writes each face back with it. The graph
+list, the entity and the neighborhood are SPARQL through ikigai-store's narrow doors; the only
+code beyond the queries is reading the corpus and source files, and the neighborhood's
+breadth-first loop, which keeps the node budget (one CONSTRUCT cannot count nodes as it walks).
 
 ## Accessibility
 
