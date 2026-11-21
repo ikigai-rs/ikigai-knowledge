@@ -223,6 +223,7 @@ pub fn seeded_store() -> ikigai_store::DurableStore {
 pub fn corpus_reader(scratch: &Scratch, name: &str) -> Capability {
     Capability::scoped([
         ikigai_knowledge::corpus_scope(name),
+        ikigai_knowledge::source_scope("ledger"),
         format!("urn:cap:fs:read:{}", scratch.knowledge().display()),
         format!("urn:cap:store:read:graph:{DEFAULT}"),
     ])
