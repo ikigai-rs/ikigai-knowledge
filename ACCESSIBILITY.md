@@ -56,6 +56,7 @@ words, the tests pin those lines exactly, and this file says what has not been t
   says so in one more statement, on the answer's own IRI:
   `<{answer}> <https://ikigai-rs.dev/ns/knowledge#truncated> "true"^^xsd:boolean`, so a reader
   or a program can tell a complete answer from a shortened one; a complete answer carries none.
+  Both graph faces omit statements containing blank nodes.
 - **Their refusals**: an entity that is not an absolute IRI (`InvalidArgument` naming `e`), a
   depth outside 1 to 3 (`InvalidArgument` naming `n`), a node budget outside 1 to 1000
   (`InvalidArgument` naming `nodes`), a face that does not exist (`InvalidArgument` naming `as`
@@ -72,7 +73,9 @@ words, the tests pin those lines exactly, and this file says what has not been t
   line saying the context was cut when it was. A claim with a control character is removed,
   and every control character in the topic or a quote is written as an escape (`\u{001B}`), so
   a model's or a document's text cannot recolor the terminal or add a line. Its Turtle face
-  (`as=text/turtle`) is Web Annotations, for programs. A caller with no
+  (`as=text/turtle`) is Web Annotations, for programs. Annotation and selector IRIs distinguish
+  different topics and claim contents. Both faces preserve quotation marks when they match
+  the passage verbatim. A caller with no
   `urn:cap:llm:use:<provider>` grant is refused by the kernel with `Denied` naming
   `urn:cap:llm:use:`, before any model is asked.
 - **Its refusals**: a topic that is empty, too long or on more than one line
@@ -121,6 +124,7 @@ The tests run on every pull request in CI and gate merge.
 | Refusal sentences name their subject | Pass | `tests/source.rs`: `an_undeclared_source_is_not_found_naming_where_it_looked`, `a_kernel_with_no_file_mount_serves_no_source_and_says_why`, `a_caller_without_the_source_grant_is_denied`, `a_malformed_declaration_is_refused_naming_the_file`, `a_blank_node_is_refused`, `a_name_that_is_not_one_path_segment_is_an_invalid_argument`, `an_unknown_face_is_an_invalid_argument_naming_both_faces`; `cargo test`, rustc 1.100.0 | each refusal's kind and the words it must contain | whether the sentence is clear when heard |
 | The corpus endpoints' faces and refusal kinds | Pass | `tests/ledger.rs` (15 tests): the graph list's exact lines, the entity and neighborhood statements, the truncation statement an answer that was cut carries and a complete one does not, the empty body a caller without a ledger's or a source's grant gets, and the kind and argument of the `e`, `n` and `nodes` refusals; `cargo test` | the graph list's lines, which statements each face holds, the refusal kind and the argument it names | the sentences of the `as`, `corpus`, undeclared-corpus and no-store refusals, which no test pins yet; how a client shows Turtle |
 | The decision trail's lines and refusal kinds | Pass | `tests/trail.rs` (13 tests): the text face's exact lines for a mixed draft, an abstention and a topic that links to nothing; the Web Annotation statements; a control character in a claim never reaching the face; the `topic` and `as` refusals, the no-model sentence, and the `Denied` naming `urn:cap:llm:use:` for a caller with no model grant; `cargo test` | each line's words and order, the counts in a number and a word that agree, the refusal kind and argument | how a client shows the lines; whether a model's sentence is clear when heard |
+| Blank nodes, trail annotation identity and literal quotes | Pass | `tests/ledger.rs` and `tests/trail.rs`; `cargo test` | graph statements omit blank terms; Turtle annotation IRIs are stable for the same topic and claim, distinguish changed ones, and preserve quoted punctuation and character offsets | how a client presents RDF or reads it aloud |
 | Self-description is well formed | Pass | `tests/conformance.rs`, ikigai-conformance 0.14.0 (ARGSPECS, VALIDATE, OUTPUTS among its checks) | a title, a summary, every argument described and typed | whether the summary is clear when heard |
 | Automated WCAG checker (for example axe) | Blocked | this crate emits no HTML, so there is no page here to run one on | | |
 | Screen reader reading the text face and the refusals | Blocked | no screen reader has been used on this output | | |

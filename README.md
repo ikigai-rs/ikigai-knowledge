@@ -109,7 +109,8 @@ source urn:knowledge:neighborhood:entity:urn:iki:ledger:default:item:01m2h5t1z80
   holds every term under that namespace the crate names to a definition there. The vocabulary is
   published at its namespace once deployed.
 - **Faces.** The graph list is `text/plain`; an entity and a neighborhood are `text/turtle` by
-  default, `as=application/n-triples` for one statement per line.
+  default, `as=application/n-triples` for one statement per line. Entity and neighborhood
+  answers omit statements with a blank subject or object before applying statement limits.
 - **Authority.** All three take `urn:cap:knowledge:read:corpus:name:{c}`, read a source's graphs
   only under `urn:cap:knowledge:read:source:name:{s}` (a source the caller may not read
   contributes nothing, as an undeclared one), read the corpus and
@@ -142,8 +143,9 @@ source urn:knowledge:trail:corpus:work topic=oxigraph as=text/turtle
    words.
 4. **Check.** A claim is kept only if it cites a passage of the context and its quote is found
    verbatim in that passage's text (at least 8 characters, or the whole passage). Every other
-   claim is removed and counted. With none left, or a topic that links to nothing, the answer
-   abstains, and a topic that links to nothing never reaches the model.
+   claim is removed and counted. Literal quotation marks are kept when the whole quote matches.
+   With none left, or a topic that links to nothing, the answer abstains, and a topic that links
+   to nothing never reaches the model.
 
 - **Faces.** `text/plain` by default: the topic, then each kept claim with its passage, its
   character range and its quote, then how many claims were removed. `as=text/turtle` is one
@@ -217,6 +219,7 @@ small pure function, a SPARQL composer or a call to a model.
 | graph | `urn:knowledge:graph:corpus:{c}` | list of names | the named graphs of a corpus that exist and the caller may read, for `graph=` sources | **live** |
 | neighborhood | `urn:knowledge:neighborhood:entity:{e}:depth:{n}` (`corpus=`, `nodes=`) | generic composer | a bounded SPARQL CONSTRUCT walk: a depth (1 to 3) and a node budget (default 100, at most 1000) | **live** |
 | decision trail | `urn:knowledge:trail:corpus:{c}` (`topic=`, `nodes=`) | composition | over a structured corpus: label match (SPARQL), the linked entities' neighborhoods, `urn:llm:ask` over their passages, then the citation check; claims as `oa:` annotations with quote and position selectors; abstains when nothing is grounded. The question-addressed `answer` below generalizes it to prose sources | **live** (ledger #3888) |
+| trail annotation and its components | `urn:knowledge:trail:corpus:{c}#claim-{digest}-{n}` with `-target`, `-quote` and `-position` suffixes for its components | output IRIs | the digest covers the topic, claim text, cited passage IRI, exact quote and character range; `n` is the claim's one-based position, distinguishing duplicates | **live** (in Turtle output) |
 | disagreement | `urn:knowledge:disagreement:entity:{e}` | generic composer | SPARQL: functional properties with more than one value, each with its sources and their authority ranks; one shape shared with ikigai-judge, designed in [docs/design/disagreement.md](docs/design/disagreement.md) (ledger #3891) | planned, ledger #3859 |
 | question | `urn:knowledge:question:hash:{h}` | resource | the question text and its corpus, content-addressed | planned, ledger #3859 |
 | link | `urn:knowledge:link:question:{h}` | composition | the entities a question names: label match first (SPARQL), a model's draft only as residual | planned, ledger #3859 |

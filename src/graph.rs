@@ -393,6 +393,7 @@ impl Endpoint for EntityEndpoint {
             "CONSTRUCT {{ ?s ?p ?o }} WHERE {{ SELECT DISTINCT ?s ?p ?o WHERE {{ \
                {entity} (<{OWL_SAME_AS}>|^<{OWL_SAME_AS}>)* ?x . \
                {{ ?x ?p ?o BIND(?x AS ?s) }} UNION {{ ?s ?p ?x BIND(?x AS ?o) }} \
+               FILTER(isIRI(?s) && !isBlank(?o)) \
              }} ORDER BY ?s ?p ?o LIMIT {} }}",
             ENTITY_STATEMENTS + 1
         );
@@ -562,6 +563,7 @@ pub(crate) async fn walk(
             "CONSTRUCT {{ ?s ?p ?o }} WHERE {{ SELECT DISTINCT ?s ?p ?o WHERE {{ \
                {{ VALUES ?x {{ {values}}} ?x ?p ?o BIND(?x AS ?s) }} UNION \
                {{ VALUES ?x {{ {values}}} ?s ?p ?x BIND(?x AS ?o) }} \
+               FILTER(isIRI(?s) && !isBlank(?o)) \
              }} ORDER BY ?s ?p ?o LIMIT {} }}",
             hop_limit + 1
         );

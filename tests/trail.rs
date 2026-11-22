@@ -119,18 +119,37 @@ fn the_turtle_face_is_web_annotations_with_quote_and_position_selectors() {
     let nt: String = triples.iter().map(|t| format!("{t} .\n")).collect();
     let answer = format!("{TRAIL_PREFIX}work");
     let oa = "http://www.w3.org/ns/oa#";
+    let target_for = |source: &str| {
+        triples
+            .iter()
+            .find(|t| {
+                t.predicate.as_str() == format!("{oa}hasSource")
+                    && t.object.to_string() == format!("<{source}>")
+            })
+            .unwrap()
+            .subject
+            .to_string()
+    };
+    let target = target_for(DECIDED);
+    let claim = target
+        .strip_prefix(&format!("<{answer}#claim-"))
+        .and_then(|id| id.strip_suffix("-target>"))
+        .unwrap();
+    let claim = format!("{answer}#claim-{claim}");
+    let other_target = target_for(STILL_OPEN);
     for line in [
-        format!("<{answer}#claim-1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{oa}Annotation> ."),
-        format!("<{answer}#claim-1> <{oa}hasTarget> <{answer}#claim-1-target> ."),
-        format!("<{answer}#claim-1-target> <{oa}hasSource> <{DECIDED}> ."),
-        format!("<{answer}#claim-1-quote> <{oa}exact> \"we adopt oxigraph, since it already backs ikigai-store\" ."),
-        format!("<{answer}#claim-1-position> <{oa}start> \"9\"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> ."),
-        format!("<{answer}#claim-2-target> <{oa}hasSource> <{STILL_OPEN}> ."),
+        format!("<{claim}> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{oa}Annotation> ."),
+        format!("<{claim}> <{oa}hasTarget> {target} ."),
+        format!("{target} <{oa}hasSelector> <{claim}-quote> ."),
+        format!("{target} <{oa}hasSelector> <{claim}-position> ."),
+        format!("<{claim}-quote> <{oa}exact> \"we adopt oxigraph, since it already backs ikigai-store\" ."),
+        format!("<{claim}-position> <{oa}start> \"9\"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> ."),
         format!("<{answer}> {REMOVED} \"3\"^^<http://www.w3.org/2001/XMLSchema#integer> ."),
     ] {
         assert!(nt.contains(&line), "missing {line}\n{nt}");
     }
-    assert!(!nt.contains("claim-3"), "{nt}");
+    assert_ne!(target, other_target);
+    assert!(!nt.contains("_:"), "{nt}");
     assert!(!nt.contains(ABSTAINED), "{nt}");
 }
 
@@ -161,7 +180,7 @@ fn the_model_sees_only_the_neighborhood_the_caller_may_read() {
 
 #[test]
 fn a_claim_quoting_a_passage_the_caller_may_read_is_kept_once_granted() {
-    let (s, kernel, _) = setup("trail-acme", &mixed_draft());
+    let (s, kernel, seen) = setup("trail-acme", &mixed_draft());
     let got = trail(&kernel, "oxigraph", None, &grants(&s, &[DEFAULT, ACME])).unwrap();
     assert!(
         got.starts_with("decision trail: oxigraph\n3 claims"),
@@ -169,6 +188,11 @@ fn a_claim_quoting_a_passage_the_caller_may_read_is_kept_once_granted() {
     );
     assert!(got.contains(&format!("cited: {ACME_COMMENT}")), "{got}");
     assert!(got.contains("2 claims removed"), "{got}");
+    let restricted = trail(&kernel, "oxigraph", None, &grants(&s, &[DEFAULT])).unwrap();
+    assert!(!restricted.contains(ACME_COMMENT), "{restricted}");
+    let prompts = seen.lock().unwrap();
+    assert_eq!(prompts.len(), 2);
+    assert!(!prompts[1].contains(ACME_COMMENT), "{}", prompts[1]);
 }
 
 #[test]
@@ -321,5 +345,116 @@ fn a_caller_without_a_model_grant_is_denied_before_any_model_call_and_not_offere
             .iter()
             .any(|l| l.starts_with("urn:knowledge:neighborhood:")),
         "{offer:?}"
+    );
+}
+
+#[test]
+fn annotation_iris_are_stable_and_distinguish_topics_and_claims() {
+    fn annotations(turtle: &str) -> std::collections::BTreeSet<String> {
+        oxttl::TurtleParser::new()
+            .for_slice(turtle.as_bytes())
+            .map(Result::unwrap)
+            .filter(|t| t.object.to_string() == "<http://www.w3.org/ns/oa#Annotation>")
+            .map(|t| t.subject.to_string())
+            .collect()
+    }
+
+    let (scratch, kernel, _) = setup("annotation-identity", &mixed_draft());
+    let cap = grants(&scratch, &[DEFAULT]);
+    let read = |topic| trail(&kernel, topic, Some("text/turtle"), &cap).unwrap();
+    let first = annotations(&read("oxigraph"));
+    assert_eq!(first.len(), 2);
+    assert_eq!(first, annotations(&read("oxigraph")));
+    let second = annotations(&read("oxigraph as the store"));
+    assert_eq!(second.len(), 2);
+    assert!(first.is_disjoint(&second));
+
+    let changed = mixed_draft().replace("Brian decided", "Brian agreed");
+    let (scratch, kernel, _) = setup("annotation-revised", &changed);
+    let revised = annotations(
+        &trail(
+            &kernel,
+            "oxigraph",
+            Some("text/turtle"),
+            &grants(&scratch, &[DEFAULT]),
+        )
+        .unwrap(),
+    );
+    assert_eq!(revised.len(), 2);
+    assert_eq!(first.intersection(&revised).count(), 1);
+}
+
+#[test]
+fn many_labels_on_one_entity_do_not_hide_the_next_entity() {
+    let (scratch, kernel, seen) = setup("trail-many-labels", "NONE");
+    let quads: String = (0..100)
+        .map(|i| format!("<urn:a> <http://www.w3.org/2000/01/rdf-schema#label> \"oxigraph {i}\" <{DEFAULT}> .\n"))
+        .collect();
+    issue(
+        &kernel,
+        request(
+            Verb::Sink,
+            "urn:iki:store:load",
+            &[("content", &quads), ("format", "application/n-quads")],
+        ),
+        &Capability::root(),
+    )
+    .unwrap();
+
+    trail(&kernel, "oxigraph", None, &grants(&scratch, &[DEFAULT])).unwrap();
+    assert!(seen
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|prompt| prompt.contains(DECIDED)));
+}
+
+#[test]
+fn an_exact_quote_keeps_its_literal_quotation_marks_in_turtle() {
+    let source = "urn:test:passage:caf%C3%A9";
+    let quote = "\"Café\\path\"";
+    let sentence = "The recorded value is \"Café\\path\".";
+    let draft = format!("CLAIM: {sentence}\nCITE: {source}\nQUOTE: {quote}\n");
+    let (scratch, kernel, _) = setup("trail-quote-escaping", &draft);
+    let literal = oxrdf::Literal::new_simple_literal(quote);
+    let quads = format!(
+        "<{source}> <http://www.w3.org/2000/01/rdf-schema#label> \"quoted value\" <{DEFAULT}> .\n\
+         <{source}> <https://ikigai-rs.dev/ns/ledger#body> {literal} <{DEFAULT}> .\n"
+    );
+    issue(
+        &kernel,
+        request(
+            Verb::Sink,
+            "urn:iki:store:load",
+            &[("content", &quads), ("format", "application/n-quads")],
+        ),
+        &Capability::root(),
+    )
+    .unwrap();
+    let cap = grants(&scratch, &[DEFAULT]);
+    let turtle = trail(&kernel, "quoted value", Some("text/turtle"), &cap).unwrap();
+    let triples: Vec<_> = oxttl::TurtleParser::new()
+        .for_slice(turtle.as_bytes())
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for (predicate, value) in [
+        ("exact", quote),
+        ("bodyValue", sentence),
+        ("start", "0"),
+        ("end", "11"),
+    ] {
+        let predicate = format!("http://www.w3.org/ns/oa#{predicate}");
+        assert!(
+            triples.iter().any(|t| t.predicate.as_str() == predicate
+                && matches!(&t.object, oxrdf::Term::Literal(l) if l.value() == value)),
+            "{turtle}"
+        );
+    }
+    assert!(
+        triples.iter().any(
+            |t| t.predicate.as_str() == "http://www.w3.org/ns/oa#hasSource"
+                && matches!(&t.object, oxrdf::Term::NamedNode(n) if n.as_str() == source)
+        ),
+        "{turtle}"
     );
 }
