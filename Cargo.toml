@@ -1,6 +1,6 @@
 [package]
 name = "ikigai-knowledge"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Grounded, cited answers over an organization's documents, as ikigai resources: source declarations, lifts, passages, drafts, entities and answers, each a resource under the caller's capability."
@@ -19,6 +19,7 @@ categories = ["wasm", "text-processing"]
 ikigai-core = "0.3.5"
 # The source endpoint reads through the kernel, whose `invoke` is `async_trait`.
 async-trait = "0.1"
+blake3 = "1"
 # A source declaration is Turtle: parsed (to refuse a malformed or blank-node declaration
 # and to resolve `<>` against the source's own name) and written back by the RDF library,
 # never by hand. The pair the ecosystem already links (ikigai-inquiry, oxigraph's).
