@@ -141,11 +141,20 @@ fn an_entity_is_its_statements_both_ways_closed_over_same_as() {
 #[test]
 fn a_ledger_without_its_read_token_gives_nothing_and_no_error() {
     let (s, kernel) = setup("entity-acme");
+    let privileged = grants(&s, &[ACME]);
+    let restricted = grants(&s, &[DEFAULT]);
+    let read = request(
+        Verb::Source,
+        &format!("{ENTITY_PREFIX}{SECRET}"),
+        &[("corpus", "work"), ("as", "application/n-triples")],
+    );
     // Granted acme only: the acme item comes back.
-    let acme = entity(&kernel, SECRET, &grants(&s, &[ACME])).unwrap();
+    let acme = entity(&kernel, SECRET, &privileged).unwrap();
     assert!(acme.contains("\"Their Q4 migration\""), "{acme}");
+    assert!(kernel.is_cached(&read, &privileged));
+    assert!(!kernel.is_cached(&read, &restricted));
     // Granted default only: the same item is exactly as empty as one that does not exist.
-    let hidden = entity(&kernel, SECRET, &grants(&s, &[DEFAULT])).unwrap();
+    let hidden = entity(&kernel, SECRET, &restricted).unwrap();
     let absent = entity(
         &kernel,
         "urn:iki:ledger:acme:item:404",
@@ -420,4 +429,28 @@ fn a_source_the_caller_may_not_read_contributes_no_graph() {
         graphs(&kernel, &grants(&s, &[DEFAULT])).unwrap(),
         format!("{DEFAULT}\n")
     );
+}
+
+#[test]
+fn entity_and_neighborhood_graphs_have_no_blank_nodes() {
+    let (scratch, kernel) = setup("graph-blank-nodes");
+    let quads = format!("<{ITEM1}> <urn:test:related> _:detail <{DEFAULT}> .\n_:detail <urn:test:related> <{ITEM1}> <{DEFAULT}> .\n");
+    issue(
+        &kernel,
+        request(
+            Verb::Sink,
+            "urn:iki:store:load",
+            &[("content", &quads), ("format", "application/n-quads")],
+        ),
+        &Capability::root(),
+    )
+    .unwrap();
+    let cap = grants(&scratch, &[DEFAULT]);
+    for answer in [
+        entity(&kernel, ITEM1, &cap).unwrap(),
+        neighborhood(&kernel, ITEM1, "1", None, &cap).unwrap(),
+    ] {
+        assert!(!answer.is_empty());
+        assert!(!answer.contains("_:"), "{answer}");
+    }
 }

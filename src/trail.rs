@@ -16,7 +16,7 @@
 //!
 //! Vector search is not used: the corpus is structured, so the label match is the link.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use ikigai_core::{
@@ -250,24 +250,24 @@ async fn link(inv: &Invocation<'_>, graphs: &[String], topic: &str) -> Result<Ve
     // The topic is written as an N-Triples literal, which escapes every character that could
     // close it, so it is a term in the query and never syntax.
     let needle = Literal::new_simple_literal(topic.to_lowercase());
+    // The CONSTRUCT carries one marker per distinct entity. Matching labels are used only
+    // to select entities, so many labels on one entity cannot exhaust the limit.
     let query = format!(
-        "CONSTRUCT {{ ?s ?p ?l }} WHERE {{ SELECT DISTINCT ?s ?p ?l WHERE {{ \
+        "CONSTRUCT {{ ?s <{RDF_TYPE}> <http://www.w3.org/2000/01/rdf-schema#Resource> }} \
+         WHERE {{ SELECT DISTINCT ?s WHERE {{ \
            VALUES ?p {{ <{DCTERMS_TITLE}> <{RDFS_LABEL}> <{SKOS_PREF_LABEL}> }} \
            ?s ?p ?l FILTER(isIRI(?s) && isLiteral(?l) && CONTAINS(LCASE(STR(?l)), {needle})) \
-         }} ORDER BY ?s ?p ?l LIMIT 100 }}"
+         }} ORDER BY ?s LIMIT {TRAIL_ENTITIES} }}"
     );
-    let mut linked: Vec<NamedNode> = Vec::new();
-    let mut found = construct(inv, graphs, &query).await?;
-    found.sort_by_key(|t| t.to_string());
-    for t in found {
-        if let NamedOrBlankNode::NamedNode(s) = t.subject {
-            if !linked.contains(&s) {
-                linked.push(s);
-            }
-        }
-    }
-    linked.truncate(TRAIL_ENTITIES);
-    Ok(linked)
+    let linked: BTreeSet<_> = construct(inv, graphs, &query)
+        .await?
+        .into_iter()
+        .filter_map(|t| match t.subject {
+            NamedOrBlankNode::NamedNode(s) => Some(s),
+            NamedOrBlankNode::BlankNode(_) => None,
+        })
+        .collect();
+    Ok(linked.into_iter().collect())
 }
 
 /// The context's passages: each subject with a title or a body, its text the title and the
@@ -304,8 +304,7 @@ fn passages(context: &[Triple]) -> BTreeMap<String, Passage> {
         }
     }
     let mut out = BTreeMap::new();
-    let subjects: std::collections::BTreeSet<&String> =
-        titles.keys().chain(bodies.keys()).collect();
+    let subjects: BTreeSet<&String> = titles.keys().chain(bodies.keys()).collect();
     for s in subjects {
         let text = match (titles.get(s), bodies.get(s)) {
             (Some(t), Some(b)) => format!("{t}\n\n{b}"),
@@ -371,8 +370,7 @@ fn check(draft: &str, passages: &BTreeMap<String, Passage>) -> (Vec<Claim>, usiz
             }
         } else if let Some(rest) = line.strip_prefix("QUOTE:") {
             if let Some(b) = blocks.last_mut() {
-                let quote = unquote(rest.trim());
-                b.2.get_or_insert_with(|| quote.to_string());
+                b.2.get_or_insert_with(|| rest.trim().to_string());
             }
         }
     }
@@ -407,16 +405,22 @@ fn supported(
         return None;
     }
     let passage = passages.get(&cite)?;
-    let length = quote.chars().count();
-    if quote.trim().is_empty() || (length < MIN_QUOTE && quote != passage.text) {
-        return None;
-    }
-    let at = passage.text.find(&quote)?;
+    // Quotation marks may be part of the passage or may wrap the model's quotation.
+    // Prefer a verbatim match before trying to remove any wrapper.
+    let (quote, length, at) = [quote.as_str(), unquote(&quote)]
+        .into_iter()
+        .find_map(|q| {
+            let length = q.chars().count();
+            if q.trim().is_empty() || (length < MIN_QUOTE && q != passage.text) {
+                return None;
+            }
+            passage.text.find(q).map(|at| (q, length, at))
+        })?;
     let start = passage.text[..at].chars().count();
     Some(Claim {
         sentence: sentence.to_string(),
         cite,
-        quote,
+        quote: quote.to_string(),
         start,
         end: start + length,
     })
@@ -430,6 +434,19 @@ struct Answer {
     removed: usize,
     cut: bool,
     abstained: Option<&'static str>,
+}
+
+/// A stable digest of the topic and the annotation's content. Length prefixes keep arbitrary
+/// text from changing field boundaries, and fixed-width integers agree across host targets.
+fn claim_digest(topic: &str, claim: &Claim) -> blake3::Hash {
+    let mut hash = blake3::Hasher::new();
+    for field in [topic, &claim.sentence, &claim.cite, &claim.quote] {
+        hash.update(&(field.len() as u64).to_be_bytes());
+        hash.update(field.as_bytes());
+    }
+    hash.update(&(claim.start as u64).to_be_bytes());
+    hash.update(&(claim.end as u64).to_be_bytes());
+    hash.finalize()
 }
 
 impl Answer {
@@ -491,10 +508,12 @@ impl Answer {
         let mut triples: Vec<Triple> = Vec::new();
         for (i, c) in self.claims.iter().enumerate() {
             let n = i + 1;
-            let ann = node(format!("{}#claim-{n}", self.iri))?;
-            let target = node(format!("{}#claim-{n}-target", self.iri))?;
-            let quote = node(format!("{}#claim-{n}-quote", self.iri))?;
-            let position = node(format!("{}#claim-{n}-position", self.iri))?;
+            let digest = claim_digest(&self.topic, c).to_hex();
+            let claim_iri = format!("{}#claim-{digest}-{n}", self.iri);
+            let target = node(format!("{claim_iri}-target"))?;
+            let quote = node(format!("{claim_iri}-quote"))?;
+            let position = node(format!("{claim_iri}-position"))?;
+            let ann = node(claim_iri)?;
             let source = node(c.cite.clone())?;
             triples.extend([
                 Triple::new(ann.clone(), p(RDF_TYPE), oa("Annotation")),
