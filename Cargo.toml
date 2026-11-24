@@ -2,6 +2,7 @@
 name = "ikigai-knowledge"
 version = "0.1.1"
 edition = "2021"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 description = "Grounded, cited answers over an organization's documents, as ikigai resources: source declarations, lifts, passages, drafts, entities and answers, each a resource under the caller's capability."
 authors = ["Brian Sletten <brian.sletten@gmail.com>"]
