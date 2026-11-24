@@ -108,9 +108,11 @@
 
 use std::collections::BTreeMap;
 
+mod document;
 mod graph;
 mod passage;
 mod trail;
+pub use document::{document_iri, DOCUMENT_BASE, DOCUMENT_ID, DOCUMENT_PREFIX, DOCUMENT_TEMPLATE};
 pub use graph::{
     corpus_file, corpus_scope, CORPUS_PREFIX, CORPUS_READ, CORPUS_READ_PREFIX, DEFAULT_NODES,
     ENTITY_ID, ENTITY_PREFIX, ENTITY_STATEMENTS, ENTITY_TEMPLATE, GRAPH_ID, GRAPH_PREFIX,
@@ -141,8 +143,8 @@ pub const VOCABULARY_NAMESPACE: &str = "https://ikigai-rs.dev/ns/knowledge#";
 
 /// This module's own vocabulary, as Turtle (`src/vocabulary.ttl`): an `owl:Ontology` for
 /// `https://ikigai-rs.dev/ns/knowledge` whose `owl:versionInfo` is the crate version, defining
-/// every term under [`VOCABULARY_NAMESPACE`] the module emits ([`TRUNCATED`], [`ABSTAINED`]
-/// and [`REMOVED_CLAIMS`]). Published
+/// every term under [`VOCABULARY_NAMESPACE`] the module emits or reads ([`TRUNCATED`],
+/// [`ABSTAINED`], [`REMOVED_CLAIMS`], [`MAX_CHARACTERS`] and [`DOCUMENT_BASE`]). Published
 /// at that namespace once deployed.
 pub const VOCABULARY: &str = include_str!("vocabulary.ttl");
 
@@ -203,6 +205,10 @@ pub fn space() -> EndpointSpace {
         .bind(
             UriTemplate::parse(TRAIL_TEMPLATE).expect("TRAIL_TEMPLATE is a valid template"),
             trail::TrailEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(DOCUMENT_TEMPLATE).expect("DOCUMENT_TEMPLATE is a valid template"),
+            document::DocumentEndpoint,
         )
         .bind(
             UriTemplate::parse(CHUNKING_TEMPLATE).expect("CHUNKING_TEMPLATE is a valid template"),
@@ -466,7 +472,7 @@ impl Declaration {
 }
 
 /// The source's own IRI, the base `<>` resolves to.
-fn source_iri(name: &str) -> String {
+pub(crate) fn source_iri(name: &str) -> String {
     format!("{SOURCE_PREFIX}{name}")
 }
 

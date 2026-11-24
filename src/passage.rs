@@ -7,9 +7,10 @@
 //! - **`urn:knowledge:passage:document:{d}:range:{start}-{end}`** is one passage: the
 //!   document's text from character `{start}` (inclusive) to `{end}` (exclusive).
 //!
-//! `{d}` is the document's own IRI. Today that is a file under the config home's `knowledge`
-//! directory, `urn:knowledge:file:path:{path}`, which the host binds; the document alias,
-//! repository trees and lifts are later rows of the map.
+//! `{d}` is the document's own IRI: a file under the config home's `knowledge` directory,
+//! `urn:knowledge:file:path:{path}`, which the host binds, or a source's document,
+//! `urn:knowledge:document:source:{s}:id:{id}` (see `document.rs`); repository trees and
+//! lifts are later rows of the map.
 //!
 //! # The rule
 //!
@@ -32,6 +33,7 @@ use ikigai_core::{
 };
 use oxrdf::{NamedOrBlankNode, Term};
 
+use crate::document::{split_alias, DOCUMENT_PREFIX};
 use crate::{check_name, read_turtle, FILE_PREFIX, FILE_TEMPLATE, FS_READ, XSD_STRING};
 
 /// The IRI template a chunking rule is served at.
@@ -149,19 +151,21 @@ pub fn chunk(text: &str, max: usize) -> Vec<(usize, usize)> {
     passages
 }
 
-/// The document `{d}` names: a file under the config home's `knowledge` directory.
+/// The document `{d}` names: a file under the config home's `knowledge` directory, or a
+/// source's document, `urn:knowledge:document:source:{s}:id:{id}`.
 fn document_arg(inv: &Invocation<'_>) -> Result<String> {
     let d = inv
         .bindings
         .get("d")
         .ok_or_else(|| Error::MissingArgument("d".to_string()))?;
     let path = d.strip_prefix(FILE_PREFIX).unwrap_or("");
-    let ok = !path.is_empty()
+    let file = !path.is_empty()
         && !path.starts_with('/')
         && path
             .split('/')
             .all(|s| !s.is_empty() && s != "." && s != "..")
         && !path.chars().any(|c| c.is_control() || c.is_whitespace());
+    let ok = file || split_alias(d).is_some();
     if ok && Iri::parse(d.to_string()).is_ok() {
         Ok(d.to_string())
     } else {
@@ -169,7 +173,8 @@ fn document_arg(inv: &Invocation<'_>) -> Result<String> {
             name: "d".to_string(),
             detail: format!(
                 "`{d}` is not a document: name a file under the config home's knowledge \
-                 directory as {FILE_PREFIX}{{path}}, such as {FILE_PREFIX}docs/README.md"
+                 directory as {FILE_PREFIX}{{path}}, such as {FILE_PREFIX}docs/README.md, or a \
+                 source's document as {DOCUMENT_PREFIX}{{s}}:id:{{id}}"
             ),
         })
     }
@@ -318,7 +323,8 @@ impl Endpoint for ChunkEndpoint {
                  urn:knowledge:passage:document:{d}:range:{start}-{end}, one per line in \
                  document order, empty when the document has no text. {d} is the document's \
                  IRI, a file under the config home's knowledge directory \
-                 (urn:knowledge:file:path:{path}), read through the kernel; {n} is the rule. \
+                 (urn:knowledge:file:path:{path}) or a source's document \
+                 (urn:knowledge:document:source:{s}:id:{id}), read through the kernel; {n} is the rule. \
                  Cached under the document's and the rule's threads, so a changed file \
                  re-derives only its own passages. Takes \
                  urn:cap:knowledge:read:chunking:name:{n} and the file's read. text/plain.",
@@ -395,7 +401,8 @@ impl Endpoint for PassageEndpoint {
                 "One passage of a document: its text from character {start} (inclusive) to \
                  {end} (exclusive), as a TextPositionSelector counts them. {d} is the \
                  document's IRI, a file under the config home's knowledge directory \
-                 (urn:knowledge:file:path:{path}), read through the kernel under the caller's \
+                 (urn:knowledge:file:path:{path}) or a source's document \
+                 (urn:knowledge:document:source:{s}:id:{id}), read through the kernel under the caller's \
                  file read. A range past the text is not-found. Cached under the document's \
                  thread. text/plain.",
             )

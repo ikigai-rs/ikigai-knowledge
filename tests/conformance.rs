@@ -22,7 +22,7 @@ use common::*;
 use ikigai_conformance::{Expected, Fixture, Suite};
 use ikigai_core::Verb;
 
-const OWN: [&str; 8] = [
+const OWN: [&str; 9] = [
     ikigai_knowledge::SOURCE_ID,
     ikigai_knowledge::GRAPH_ID,
     ikigai_knowledge::ENTITY_ID,
@@ -31,6 +31,7 @@ const OWN: [&str; 8] = [
     ikigai_knowledge::CHUNKING_ID,
     ikigai_knowledge::CHUNK_ID,
     ikigai_knowledge::PASSAGE_ID,
+    ikigai_knowledge::DOCUMENT_ID,
 ];
 
 /// The store's endpoints, bound beside the module.
@@ -86,6 +87,16 @@ fn conforms() {
     )
     .expect("write the document");
     let document = format!("{}docs/example.md", ikigai_knowledge::FILE_PREFIX);
+    // A source whose documents are the files under docs/, for the document alias.
+    scratch.declare(
+        "docs",
+        "<> <https://ikigai-rs.dev/ns/knowledge#documentBase> <urn:knowledge:file:path:docs/> .\n",
+    );
+    let aliased = || {
+        Fixture::new(ikigai_knowledge::DOCUMENT_ID, Verb::Source)
+            .binding("s", "docs")
+            .binding("d", "example.md")
+    };
     let chunking = |cap: Option<ikigai_core::Capability>| {
         let f = Fixture::new(ikigai_knowledge::CHUNKING_ID, Verb::Source).binding("n", "example");
         match cap {
@@ -162,6 +173,9 @@ fn conforms() {
         .cacheable(ikigai_knowledge::CHUNKING_ID)
         .cacheable(ikigai_knowledge::CHUNK_ID)
         .cacheable(ikigai_knowledge::PASSAGE_ID)
+        .cacheable(ikigai_knowledge::DOCUMENT_ID)
+        .fixture(aliased())
+        .enforced_under(aliased().capability(reader(&scratch, "another")))
         .fixture(chunking(None))
         .fixture(chunks())
         .fixture(
@@ -199,9 +213,11 @@ fn conforms() {
         .run_blocking(&kernel);
     eprintln!("{report}");
     report.assert_clean_with(&Expected::new().walked(OWN));
-    // Exactly one action is unprobed, and only by BODIES: the trail is live by decision (a
-    // model drafts it), so two independent calls cannot be compared byte for byte. Every
-    // other check observed it, and every other endpoint is observed by every check.
+    // Exactly two actions are unprobed, each by one check. BODIES for the trail: it is live
+    // by decision (a model drafts it), so two independent calls cannot be compared byte for
+    // byte. OUTPUTS for the document: a declared pass-through whose face is the target's,
+    // which the walk cannot resolve from a binding; `tests/document.rs` holds the served
+    // type to the target's. Every other endpoint is observed by every check.
     let unprobed: Vec<(String, ikigai_conformance::Check)> = report
         .unprobed
         .iter()
@@ -209,10 +225,16 @@ fn conforms() {
         .collect();
     assert_eq!(
         unprobed,
-        [(
-            ikigai_knowledge::TRAIL_ID.to_string(),
-            ikigai_conformance::Check::Bodies
-        )],
+        [
+            (
+                ikigai_knowledge::TRAIL_ID.to_string(),
+                ikigai_conformance::Check::Bodies
+            ),
+            (
+                ikigai_knowledge::DOCUMENT_ID.to_string(),
+                ikigai_conformance::Check::Outputs
+            ),
+        ],
         "{report}"
     );
     assert_eq!(
