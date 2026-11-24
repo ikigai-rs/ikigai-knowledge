@@ -65,6 +65,19 @@ words, the tests pin those lines exactly, and this file says what has not been t
   source not declared (`NotFound` naming the file it looked for), a corpus part that is not a
   source (refused naming the file), and no store in the kernel (`NotFound` saying how a host
   binds one).
+- **The chunking rule, chunk list and passage faces** (`urn:knowledge:chunking:name:{n}`,
+  `urn:knowledge:chunk:document:{d}:chunking:{n}`,
+  `urn:knowledge:passage:document:{d}:range:{start}-{end}`, all `text/plain`): the rule as one
+  sentence, `chunking {n}: paragraphs packed into passages of at most {max} character(s)`; the
+  chunk list as passage names, one per line in document order, an empty body for a document
+  with no text; and a passage as the document's own characters, unchanged. Their refusals each
+  name what was wrong: a document outside the mount (`InvalidArgument` naming `d`), an offset
+  that is not a whole number (`InvalidArgument` naming `start` or `end`), a range that ends
+  before it starts (`InvalidArgument` naming `end`), a range past the text (`NotFound` with the
+  document's length), a missing document or rule (`NotFound` naming it), a rule the caller may
+  not read (`Denied` naming the scope), and a rule without one whole `maxCharacters` (refused
+  naming its file). `tests/passage.rs` pins the rule's sentence, the list and the passages
+  exactly.
 - **The decision trail's text face** (`urn:knowledge:trail:corpus:{c}`, `text/plain`, the
   default): a first line `decision trail: {topic}`; then either `no grounded answer: {why}` or
   `{n} claim(s), each with the passage it rests on` and each claim numbered, with its

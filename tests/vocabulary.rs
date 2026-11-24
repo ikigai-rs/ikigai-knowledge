@@ -3,7 +3,9 @@
 
 use std::collections::BTreeSet;
 
-use ikigai_knowledge::{ABSTAINED, REMOVED_CLAIMS, TRUNCATED, VOCABULARY, VOCABULARY_NAMESPACE};
+use ikigai_knowledge::{
+    ABSTAINED, MAX_CHARACTERS, REMOVED_CLAIMS, TRUNCATED, VOCABULARY, VOCABULARY_NAMESPACE,
+};
 use oxrdf::{Literal, NamedNode, NamedOrBlankNode, Term, Triple};
 use oxttl::TurtleParser;
 
@@ -13,6 +15,7 @@ const SOURCES: &[(&str, &str)] = &[
     ("src/lib.rs", include_str!("../src/lib.rs")),
     ("src/graph.rs", include_str!("../src/graph.rs")),
     ("src/trail.rs", include_str!("../src/trail.rs")),
+    ("src/passage.rs", include_str!("../src/passage.rs")),
 ];
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -99,7 +102,12 @@ fn truncated_is_a_boolean_property_with_a_label_and_a_comment() {
 fn the_trail_terms_are_properties_with_a_range_a_label_and_a_comment() {
     let triples = vocabulary();
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    for (term, range) in [(ABSTAINED, XSD_BOOLEAN), (REMOVED_CLAIMS, XSD_INTEGER)] {
+    const XSD_POSITIVE: &str = "http://www.w3.org/2001/XMLSchema#positiveInteger";
+    for (term, range) in [
+        (ABSTAINED, XSD_BOOLEAN),
+        (REMOVED_CLAIMS, XSD_INTEGER),
+        (MAX_CHARACTERS, XSD_POSITIVE),
+    ] {
         assert!(term.starts_with(VOCABULARY_NAMESPACE), "{term}");
         assert!(objects(&triples, term, RDF_TYPE).contains(&named(RDF_PROPERTY)));
         assert_eq!(

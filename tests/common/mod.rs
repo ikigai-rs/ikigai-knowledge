@@ -25,9 +25,15 @@ pub struct Scratch(PathBuf);
 
 impl Scratch {
     pub fn new(tag: &str) -> Scratch {
+        // A per-process counter as well as the clock: macOS's clock ticks in microseconds, so
+        // two tests with one tag starting together got ONE directory and removed it under
+        // each other (seen as `changed while read` and on-disk-spelling refusals from the
+        // file module, on macOS only).
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "ikigai-knowledge-{}-{}-{tag}",
+            "ikigai-knowledge-{}-{}-{}-{tag}",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("clock is after the epoch")

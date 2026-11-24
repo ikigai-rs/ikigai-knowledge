@@ -22,12 +22,15 @@ use common::*;
 use ikigai_conformance::{Expected, Fixture, Suite};
 use ikigai_core::Verb;
 
-const OWN: [&str; 5] = [
+const OWN: [&str; 8] = [
     ikigai_knowledge::SOURCE_ID,
     ikigai_knowledge::GRAPH_ID,
     ikigai_knowledge::ENTITY_ID,
     ikigai_knowledge::NEIGHBORHOOD_ID,
     ikigai_knowledge::TRAIL_ID,
+    ikigai_knowledge::CHUNKING_ID,
+    ikigai_knowledge::CHUNK_ID,
+    ikigai_knowledge::PASSAGE_ID,
 ];
 
 /// The store's endpoints, bound beside the module.
@@ -68,6 +71,37 @@ fn conforms() {
     scratch.declare("example", LEDGER);
     scratch.declare("ledger", LEDGER_SOURCE);
     scratch.declare_corpus("example", WORK);
+    // A chunking rule and one document, for the passage endpoints.
+    let knowledge = scratch.knowledge();
+    std::fs::create_dir_all(knowledge.join("chunking")).expect("chunking dir");
+    std::fs::create_dir_all(knowledge.join("docs")).expect("docs dir");
+    std::fs::write(
+        knowledge.join("chunking/example.ttl"),
+        "<> <https://ikigai-rs.dev/ns/knowledge#maxCharacters> 40 .\n",
+    )
+    .expect("write the rule");
+    std::fs::write(
+        knowledge.join("docs/example.md"),
+        "# Example\n\nOne paragraph.\n",
+    )
+    .expect("write the document");
+    let document = format!("{}docs/example.md", ikigai_knowledge::FILE_PREFIX);
+    let chunking = |cap: Option<ikigai_core::Capability>| {
+        let f = Fixture::new(ikigai_knowledge::CHUNKING_ID, Verb::Source).binding("n", "example");
+        match cap {
+            Some(cap) => f.capability(cap),
+            None => f,
+        }
+    };
+    let chunks = || {
+        Fixture::new(ikigai_knowledge::CHUNK_ID, Verb::Source)
+            .binding("d", &document)
+            .binding("n", "example")
+    };
+    let another_rule = ikigai_core::Capability::scoped([
+        ikigai_knowledge::chunking_scope("another"),
+        format!("urn:cap:fs:read:{}", scratch.knowledge().display()),
+    ]);
     let space = Arc::new(ikigai_knowledge::space());
     // The model the trail drafts with: a stub at urn:llm:ask, which a host fills with
     // ikigai-llm. Its draft cites the example item's title, so the check keeps it.
@@ -125,6 +159,19 @@ fn conforms() {
         .cacheable(ikigai_knowledge::NEIGHBORHOOD_ID)
         // A model drafts the trail, so it is live by decision: never served from a cache.
         .live(ikigai_knowledge::TRAIL_ID)
+        .cacheable(ikigai_knowledge::CHUNKING_ID)
+        .cacheable(ikigai_knowledge::CHUNK_ID)
+        .cacheable(ikigai_knowledge::PASSAGE_ID)
+        .fixture(chunking(None))
+        .fixture(chunks())
+        .fixture(
+            Fixture::new(ikigai_knowledge::PASSAGE_ID, Verb::Source)
+                .binding("d", &document)
+                .binding("start", "0")
+                .binding("end", "9"),
+        )
+        .enforced_under(chunking(Some(another_rule.clone())))
+        .enforced_under(chunks().capability(another_rule.clone()))
         .fixture(Fixture::new(ikigai_knowledge::SOURCE_ID, Verb::Source).binding("name", "example"))
         .fixture(Fixture::new(ikigai_knowledge::GRAPH_ID, Verb::Source).binding("c", "example"))
         .fixture(entity(ikigai_knowledge::ENTITY_ID))

@@ -23,9 +23,10 @@ person's verdict, an entity, a question and its answer. Model output is provisio
 provenanced: it lands in its own graph, carrying the model that wrote it, and becomes accepted
 only by a person's verdict or a stated rule.
 
-**Status: a scaffold.** Five resources exist today: the source declaration, and over the work
+**Status: a scaffold.** These resources exist today: the source declaration; over the work
 ledger, the first source, a corpus's graphs, an entity, a bounded neighborhood and a decision
-trail, the first cited answer. The map below is the
+trail, the first cited answer; and over files, a chunking rule, a document's passages under it
+and one passage. The map below is the
 contract the rest is built to; each planned row names the ledger item that builds it.
 
 ## Use it today
@@ -167,6 +168,48 @@ source urn:knowledge:trail:corpus:work topic=oxigraph as=text/turtle
   `InvalidArgument` naming `topic`; a kernel with nothing at `urn:llm:ask` is `NotFound` saying
   how a host binds one.
 
+### Documents and passages
+
+A document's passages come from a **chunking rule**, which is itself a resource: a Turtle file
+in the config home.
+
+```turtle
+# <config home>/knowledge/chunking/prose.ttl
+<> <https://ikigai-rs.dev/ns/knowledge#maxCharacters> 1200 .
+```
+
+```text
+source urn:knowledge:chunking:name:prose
+source urn:knowledge:chunk:document:urn:knowledge:file:path:docs/README.md:chunking:prose
+source urn:knowledge:passage:document:urn:knowledge:file:path:docs/README.md:range:0-412
+```
+
+- **Rule.** A paragraph is a run of lines that are not blank. Paragraphs are packed into one
+  passage while it spans at most `maxCharacters` characters (1 to 100000); a longer paragraph
+  is cut into pieces of that many. A passage runs from its first paragraph's first character to
+  its last paragraph's last, in characters, start inclusive and end exclusive, as a
+  `TextPositionSelector` counts them.
+- **Documents.** `{d}` is the document's own IRI. Today that is a file under the config home's
+  `knowledge` directory, `urn:knowledge:file:path:{path}`, read through the kernel from the
+  mount the host binds; a path that leaves the mount is `InvalidArgument` naming `d`. The
+  document alias, repository trees through `urn:repo:*`, ikigai-markdown's lift and browse's
+  archived explanations are not built yet.
+- **Faces.** All three are `text/plain`: the rule as one sentence, the chunk list as passage
+  names one per line in document order (empty for a document with no text), and a passage as
+  its text exactly.
+- **Authority.** The rule and the chunk list take `urn:cap:knowledge:read:chunking:name:{n}`;
+  all three read the files through the kernel, so the caller also needs read authority over
+  them (with `ikigai-fs`, a `urn:cap:fs:read:` grant).
+- **Errors.** A range that ends before it starts is `InvalidArgument` naming `end`; one past
+  the text is `NotFound` saying how many characters the document has. A missing document or
+  rule is `NotFound` naming it; a rule that does not state `maxCharacters` exactly once, as a
+  whole number in range, is refused naming its file.
+- **Golden threads.** Each answer is cached under the threads of the files it read: a passage
+  and a chunk list under the document's file, a chunk list also under the rule's. A changed
+  file re-derives only its own passages, and every other document's stay cached
+  (`tests/passage.rs` edits one file and shows it); a changed rule re-derives every chunk list
+  under it.
+
 ### Mounting it in a host
 
 The space is configuration-free and names itself `urn:iki:space:knowledge`. This crate opens no
@@ -210,7 +253,9 @@ small pure function, a SPARQL composer or a call to a model.
 | corpus | `urn:knowledge:corpus:name:{c}` | list of names | the sources a corpus holds; a corpus is also a corridor (below). Today a Turtle file in the config home, `knowledge/corpus/{c}.ttl`, read by the graph list; not served at its own name yet | planned, ledger #3857 |
 | document | `urn:knowledge:document:source:{s}:id:{d}` | alias rule | onto the underlying resource: `urn:file:…`, `urn:iki:ledger:item:N`, `urn:repo:{repo}:file:…` | planned, ledger #3857 |
 | lift | `urn:knowledge:lift:document:{d}` | transreption | the document's structure as RDF: ikigai-markdown's generic lift plus a mapping resource; the ledger's own Turtle as is; HTML through ikigai-html; PDF and slides by a text transreptor that keeps page and offsets; a database by an R2RML/RML mapping resource | planned, ledger #3857, #3860, #3861 |
-| passage | `urn:knowledge:passage:document:{d}:range:{start}-{end}` | tiny pure function | a slice of the lift's text; the chunking rule is a resource (`urn:knowledge:chunking:name:{n}`) | planned, ledger #3857 |
+| chunking rule | `urn:knowledge:chunking:name:{n}` | **ATOM** (config) | a Turtle file in the config home, `knowledge/chunking/{n}.ttl`: paragraphs packed into passages of at most `knowledge:maxCharacters` | **live** |
+| chunk list | `urn:knowledge:chunk:document:{d}:chunking:{n}` | list of names | a document's passages under a rule, in document order; cached under the document's and the rule's threads. Over files in the config home today; repository trees and lifts are ledger #3857 | **live** (files), planned, ledger #3857 |
+| passage | `urn:knowledge:passage:document:{d}:range:{start}-{end}` | tiny pure function | a slice of the document's text, in characters, end exclusive. Over files in the config home today; a slice of the lift's text once lifts land | **live** (files), planned, ledger #3857 |
 | prompt | `urn:knowledge:prompt:name:{n}` | resource | the extraction and answer prompts are files, versioned, golden-threaded | planned, ledger #3858 |
 | ontology | `urn:knowledge:ontology:name:{n}` | resource | SHACL shapes the extracted entities and relations must satisfy | planned, ledger #3858 |
 | draft | `urn:knowledge:draft:passage:{p}:model:{m}` | composition | `urn:llm:ask` over passage and prompt; the result SHACL-checked against the ontology; stored as `oa:` annotations with provenance; cacheable by input | planned, ledger #3858 |
