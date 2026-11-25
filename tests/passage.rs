@@ -209,3 +209,67 @@ fn refusals_name_what_was_wrong() {
         other => panic!("expected NotFound, got {other:?}"),
     }
 }
+
+/// A host's file mount that serves any path, as the crate allows: `ikigai-fs` refuses a `:` in
+/// a path, but which module answers at the file template is the host's choice.
+fn kernel_over_any_path() -> Kernel {
+    use ikigai_core::{
+        Description, EndpointSpace, Fallback, FnEndpoint, ReprType, Representation, Space,
+        UriTemplate,
+    };
+    use std::sync::Arc;
+    let file = FnEndpoint::new("file", |inv| {
+        let body = match inv.bindings.get("path") {
+            Some("chunking/prose.ttl") => RULE,
+            _ => "abcdefghij\n",
+        };
+        Ok(Representation::new(
+            ReprType::new("text/plain"),
+            body.as_bytes().to_vec(),
+        ))
+    })
+    .with_description(
+        Description::new("file")
+            .verb(Verb::Source)
+            .output("text/plain"),
+    );
+    let mount = EndpointSpace::new().bind(
+        UriTemplate::parse(ikigai_knowledge::FILE_TEMPLATE).unwrap(),
+        file,
+    );
+    let spaces: Vec<Arc<dyn Space>> = vec![Arc::new(ikigai_knowledge::space()), Arc::new(mount)];
+    Kernel::new(Arc::new(Fallback::new(spaces)))
+}
+
+#[test]
+fn a_document_whose_passage_names_would_not_read_back_is_refused() {
+    let kernel = kernel_over_any_path();
+    let cap = Capability::root();
+    // The mount serves an ordinary name, and every name the list gives reads back.
+    let names = lines(&kernel, chunks("docs/x", "prose"), &cap);
+    assert_eq!(
+        names,
+        [ikigai_knowledge::passage_iri(&doc("docs/x"), 0, 10)]
+    );
+    for path in ["docs/x:range:0-3", "docs/x:range"] {
+        match issue(&kernel, chunks(path, "prose"), &cap) {
+            Err(Error::InvalidArgument { name, detail }) => {
+                assert_eq!(name, "d", "{path}: {detail}");
+                assert!(detail.contains("rename the file"), "{detail}");
+            }
+            Ok(list) => {
+                let listed: Vec<_> = text(&list)
+                    .lines()
+                    .map(|name| {
+                        (
+                            name.to_string(),
+                            issue(&kernel, get(name), &cap).map(|r| text(&r)),
+                        )
+                    })
+                    .collect();
+                panic!("{path}: a list whose names do not read back as its passages: {listed:?}");
+            }
+            Err(other) => panic!("{path}: expected InvalidArgument naming d, got {other:?}"),
+        }
+    }
+}
