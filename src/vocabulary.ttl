@@ -40,3 +40,14 @@ knowledge:documentBase a rdf:Property ;
     rdfs:label "document base"@en ;
     rdfs:comment "On a source declaration: the IRI its documents live under. The source's document with the id d, urn:knowledge:document:source:{s}:id:{d}, is an alias onto this IRI followed by d."@en ;
     rdfs:range rdfs:Resource .
+
+knowledge:revision a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "revision"@en ;
+    rdfs:comment "On a passage as of a revision: the revision of the document whose text the passage is a range of, the BLAKE3 digest of that text in 64 lowercase hex digits. The passage's selectors count characters of that revision, not of the document's current text."@en ;
+    rdfs:range xsd:string .
+
+knowledge:currentPassage a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "current passage"@en ;
+    rdfs:comment "On a passage as of a revision: the passage of the document's current text holding the same words, found by the passage's TextQuoteSelector (its exact text with its prefix and suffix, else its exact text where it occurs once). Absent when the current text holds no such words, or the document is gone."@en .

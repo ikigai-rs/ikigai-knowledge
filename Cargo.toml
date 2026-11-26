@@ -52,3 +52,8 @@ ikigai-fs = "0.4.2"
 # the conformance on core 0.3.0; every check runs by default since 0.12.0.
 # ⚠ `"0.14.0"` is `<0.15.0`.
 ikigai-conformance = "0.14.0"
+# The persistent-naming resolver, so a test shows an as-of passage's HTTP IRI answered with a
+# 302 by a `redirect` claim and its rule, then followed to the passage. A DEV-dependency
+# only: which resolver answers for a namespace is the operator's choice. 0.9.0 is the newest
+# release, on core 0.3. ⚠ `"0.9.0"` is `<0.10.0`.
+ikigai-name = "0.9.0"

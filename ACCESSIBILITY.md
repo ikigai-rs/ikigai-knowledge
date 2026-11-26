@@ -89,6 +89,18 @@ words, the tests pin those lines exactly, and this file says what has not been t
   document the base does not hold (`NotFound` naming the alias and the target). A chunk list or
   passage given a `{d}` that is neither a file nor an alias names both forms.
   `tests/document.rs` pins the bytes, the media type and each refusal.
+- **The revision and as-of passage faces** (`urn:knowledge:revision:document:{d}`,
+  `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}`): the revision as one
+  line, the 64 lowercase hex digits of the document's digest, for `Source` and `Sink` alike;
+  and an as-of passage as the revision's own characters, unchanged (`text/plain`), or, with
+  `as=text/turtle`, its Web Annotation target for programs. Their refusals name what was
+  wrong: a revision that is not 64 lowercase hex digits (`InvalidArgument` naming `r`), the
+  range refusals of a passage above, with the revision's length, a revision neither current
+  nor archived (`NotFound` saying the document changed or is gone, that the revision was not
+  archived, how to archive one and where the current text is), an archive whose digest is not
+  its name (refused, naming both digests), a face that does not exist (`InvalidArgument` naming
+  `as` and both faces) and no writable file module (`NotFound` saying how a host binds one).
+  `tests/revision.rs` pins the text and the refusals' words.
 - **The decision trail's text face** (`urn:knowledge:trail:corpus:{c}`, `text/plain`, the
   default): a first line `decision trail: {topic}`; then either `no grounded answer: {why}` or
   `{n} claim(s), each with the passage it rests on` and each claim numbered, with its

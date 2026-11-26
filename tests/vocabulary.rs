@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 
 use ikigai_knowledge::{
-    ABSTAINED, DOCUMENT_BASE, MAX_CHARACTERS, REMOVED_CLAIMS, TRUNCATED, VOCABULARY,
-    VOCABULARY_NAMESPACE,
+    ABSTAINED, CURRENT_PASSAGE, DOCUMENT_BASE, MAX_CHARACTERS, REMOVED_CLAIMS, REVISION, TRUNCATED,
+    VOCABULARY, VOCABULARY_NAMESPACE,
 };
 use oxrdf::{Literal, NamedNode, NamedOrBlankNode, Term, Triple};
 use oxttl::TurtleParser;
@@ -18,6 +18,7 @@ const SOURCES: &[(&str, &str)] = &[
     ("src/trail.rs", include_str!("../src/trail.rs")),
     ("src/passage.rs", include_str!("../src/passage.rs")),
     ("src/document.rs", include_str!("../src/document.rs")),
+    ("src/revision.rs", include_str!("../src/revision.rs")),
 ];
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -106,11 +107,13 @@ fn the_trail_terms_are_properties_with_a_range_a_label_and_a_comment() {
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     const XSD_POSITIVE: &str = "http://www.w3.org/2001/XMLSchema#positiveInteger";
     const RDFS_RESOURCE: &str = "http://www.w3.org/2000/01/rdf-schema#Resource";
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
     for (term, range) in [
         (ABSTAINED, XSD_BOOLEAN),
         (REMOVED_CLAIMS, XSD_INTEGER),
         (MAX_CHARACTERS, XSD_POSITIVE),
         (DOCUMENT_BASE, RDFS_RESOURCE),
+        (REVISION, XSD_STRING),
     ] {
         assert!(term.starts_with(VOCABULARY_NAMESPACE), "{term}");
         assert!(objects(&triples, term, RDF_TYPE).contains(&named(RDF_PROPERTY)));
@@ -122,6 +125,15 @@ fn the_trail_terms_are_properties_with_a_range_a_label_and_a_comment() {
         assert_eq!(objects(&triples, term, RDFS_LABEL).len(), 1, "{term}");
         assert_eq!(objects(&triples, term, RDFS_COMMENT).len(), 1, "{term}");
     }
+}
+
+#[test]
+fn the_current_passage_is_a_property_with_a_label_and_a_comment() {
+    let triples = vocabulary();
+    assert!(CURRENT_PASSAGE.starts_with(VOCABULARY_NAMESPACE));
+    assert!(objects(&triples, CURRENT_PASSAGE, RDF_TYPE).contains(&named(RDF_PROPERTY)));
+    assert_eq!(objects(&triples, CURRENT_PASSAGE, RDFS_LABEL).len(), 1);
+    assert_eq!(objects(&triples, CURRENT_PASSAGE, RDFS_COMMENT).len(), 1);
 }
 
 #[test]

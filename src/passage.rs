@@ -153,7 +153,7 @@ pub fn chunk(text: &str, max: usize) -> Vec<(usize, usize)> {
 
 /// The document `{d}` names: a file under the config home's `knowledge` directory, or a
 /// source's document, `urn:knowledge:document:source:{s}:id:{id}`.
-fn document_arg(inv: &Invocation<'_>) -> Result<String> {
+pub(crate) fn document_arg(inv: &Invocation<'_>) -> Result<String> {
     let d = inv
         .bindings
         .get("d")
@@ -243,7 +243,7 @@ async fn read_rule(inv: &Invocation<'_>, name: &str) -> Result<usize> {
 }
 
 /// Read the document's text through the kernel.
-async fn read_document(inv: &Invocation<'_>, document: &str) -> Result<String> {
+pub(crate) async fn read_document(inv: &Invocation<'_>, document: &str) -> Result<String> {
     let iri =
         Iri::parse(document).map_err(|e| Error::Endpoint(format!("document `{document}`: {e}")))?;
     let repr = match inv.source(&iri).await {
@@ -267,6 +267,24 @@ async fn read_document(inv: &Invocation<'_>, document: &str) -> Result<String> {
             "document `{document}` is not UTF-8 text, so it has no passages"
         ))
     })
+}
+
+/// Read the document's text through the kernel, or `None` when nothing is there. The miss
+/// hangs from the document's thread, so writing it un-misses the answer.
+pub(crate) async fn read_optional(inv: &Invocation<'_>, document: &str) -> Result<Option<String>> {
+    match read_document(inv, document).await {
+        Ok(text) => Ok(Some(text)),
+        Err(Error::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// The characters of `text` from `start` to `end`, end exclusive.
+pub(crate) fn slice(text: &str, start: usize, end: usize) -> String {
+    text.chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect()
 }
 
 fn text_answer(body: String) -> Representation {
@@ -371,7 +389,7 @@ impl Endpoint for ChunkEndpoint {
 pub(crate) struct PassageEndpoint;
 
 /// A range bound: a whole number of characters.
-fn bound(inv: &Invocation<'_>, name: &str) -> Result<usize> {
+pub(crate) fn bound(inv: &Invocation<'_>, name: &str) -> Result<usize> {
     let raw = inv
         .bindings
         .get(name)
@@ -408,8 +426,7 @@ impl Endpoint for PassageEndpoint {
                 "no passage {start}-{end} in `{document}`: it has {length} characters"
             )));
         }
-        let slice: String = text.chars().skip(start).take(end - start).collect();
-        Ok(text_answer(slice))
+        Ok(text_answer(slice(&text, start, end)))
     }
 
     fn describe(&self) -> Description {
