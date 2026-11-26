@@ -34,3 +34,9 @@ knowledge:maxCharacters a rdf:Property ;
     rdfs:label "maximum characters"@en ;
     rdfs:comment "On a chunking rule: the most characters one passage spans. Paragraphs are packed into a passage while it spans at most this many; a longer paragraph is cut into pieces of this many."@en ;
     rdfs:range xsd:positiveInteger .
+
+knowledge:documentBase a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "document base"@en ;
+    rdfs:comment "On a source declaration: the IRI its documents live under. The source's document with the id d, urn:knowledge:document:source:{s}:id:{d}, is an alias onto this IRI followed by d."@en ;
+    rdfs:range rdfs:Resource .

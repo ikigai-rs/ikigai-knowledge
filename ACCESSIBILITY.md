@@ -80,6 +80,15 @@ words, the tests pin those lines exactly, and this file says what has not been t
   not read (`Denied` naming the scope), and a rule without one whole `maxCharacters` (refused
   naming its file). `tests/passage.rs` pins the rule's sentence, the list and the passages
   exactly.
+- **The document alias** (`urn:knowledge:document:source:{s}:id:{d}`): the target's own
+  bytes in the target's own media type, unchanged, so it adds no text of its own beyond its
+  refusals. Each names what was wrong: an id that is not a relative path (`InvalidArgument`
+  naming `d` and what a valid id looks like), a source the caller may not read (`Denied`
+  naming the scope), a source not declared (`NotFound` naming its file), a declaration without
+  one `knowledge:documentBase` (refused naming its file and the statement it needs), and a
+  document the base does not hold (`NotFound` naming the alias and the target). A chunk list or
+  passage given a `{d}` that is neither a file nor an alias names both forms.
+  `tests/document.rs` pins the bytes, the media type and each refusal.
 - **The decision trail's text face** (`urn:knowledge:trail:corpus:{c}`, `text/plain`, the
   default): a first line `decision trail: {topic}`; then either `no grounded answer: {why}` or
   `{n} claim(s), each with the passage it rests on` and each claim numbered, with its
@@ -237,6 +246,7 @@ and before any conformance claim.
 | 2026-11-20 | The corpus graph list, the entity and the neighborhood: their faces and refusals (ledger #3856) | `tests/ledger.rs` and the conformance walk over four endpoints |
 | 2026-11-20 | The truncation statement on an entity or neighborhood that was cut (ledger #3884) | `tests/ledger.rs`: `a_complete_neighborhood_says_nothing_about_a_cut`, `a_hub_node_shortens_the_walk_instead_of_failing_it`, `an_entity_cut_at_its_limit_says_so_and_cuts_deterministically` |
 | 2026-11-21 | The decision trail's faces and refusals (ledger #3888) | `tests/trail.rs` and the conformance walk over five endpoints |
+| 2026-11-24 | The document alias and its refusals (ledger #3857) | `tests/document.rs` and the conformance walk over nine endpoints |
 
 ## References
 

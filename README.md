@@ -25,8 +25,8 @@ only by a person's verdict or a stated rule.
 
 **Status: a scaffold.** These resources exist today: the source declaration; over the work
 ledger, the first source, a corpus's graphs, an entity, a bounded neighborhood and a decision
-trail, the first cited answer; and over files, a chunking rule, a document's passages under it
-and one passage. The map below is the
+trail, the first cited answer; and over files, a source's document by its id, a chunking
+rule, a document's passages under it and one passage. The map below is the
 contract the rest is built to; each planned row names the ledger item that builds it.
 
 ## Use it today
@@ -189,11 +189,11 @@ source urn:knowledge:passage:document:urn:knowledge:file:path:docs/README.md:ran
   is cut into pieces of that many. A passage runs from its first paragraph's first character to
   its last paragraph's last, in characters, start inclusive and end exclusive, as a
   `TextPositionSelector` counts them.
-- **Documents.** `{d}` is the document's own IRI. Today that is a file under the config home's
-  `knowledge` directory, `urn:knowledge:file:path:{path}`, read through the kernel from the
-  mount the host binds; a path that leaves the mount is `InvalidArgument` naming `d`. The
-  document alias, repository trees through `urn:repo:*`, ikigai-markdown's lift and browse's
-  archived explanations are not built yet.
+- **Documents.** `{d}` is the document's own IRI: a file under the config home's `knowledge`
+  directory, `urn:knowledge:file:path:{path}`, read through the kernel from the mount the host
+  binds, or a source's document, `urn:knowledge:document:source:{s}:id:{id}` (below). A path
+  that leaves the mount is `InvalidArgument` naming `d`. Repository trees through
+  `urn:repo:*`, ikigai-markdown's lift and browse's archived explanations are not built yet.
 - **Faces.** All three are `text/plain`: the rule as one sentence, the chunk list as passage
   names one per line in document order (empty for a document with no text), and a passage as
   its text exactly.
@@ -211,6 +211,43 @@ source urn:knowledge:passage:document:urn:knowledge:file:path:docs/README.md:ran
   file re-derives only its own passages, and every other document's stay cached
   (`tests/passage.rs` edits one file and shows it); a changed rule re-derives every chunk list
   under it.
+
+### A source's documents
+
+A source that holds documents says where they live, once, in its declaration:
+
+```turtle
+# <config home>/knowledge/source/docs.ttl
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix knowledge: <https://ikigai-rs.dev/ns/knowledge#> .
+<> dcterms:title "Our docs" ;
+   knowledge:documentBase <urn:knowledge:file:path:docs/> .
+```
+
+```text
+source urn:knowledge:document:source:docs:id:guide/intro.md
+source urn:knowledge:chunk:document:urn:knowledge:document:source:docs:id:guide/intro.md:chunking:prose
+```
+
+- **Alias.** `urn:knowledge:document:source:{s}:id:{id}` answers what the base followed by
+  `{id}` answers (`urn:knowledge:file:path:docs/guide/intro.md` here), byte for byte and in
+  its media type. `{id}` is a relative path: no empty, `.` or `..` segment, no whitespace,
+  `?` or `#`, so it names only something beneath the base.
+- **Passages.** The chunk list and the passage take an alias as their `{d}`, like a file. A
+  passage of an aliased document is named under the alias, so a citation names the source it
+  rests on.
+- **Authority.** The alias takes `urn:cap:knowledge:read:source:name:{s}`, refused with
+  `Denied` before anything is read, and the declaration's file read; the target is read
+  through the kernel under the caller's own capability, so the resource there judges it.
+- **Errors.** An id that is not a relative path is `InvalidArgument` naming `d`. A source not
+  declared is `NotFound` naming its file, and one that does not state `knowledge:documentBase`
+  exactly once, as an IRI, is refused naming its file. A document the base does not hold is
+  `NotFound` naming the alias and the target.
+- **Golden threads.** The alias is cached under the declaration's file and the target's
+  thread. A changed file re-derives only the documents and passages over it
+  (`tests/document.rs` edits one file and shows the other stays cached); a changed
+  declaration re-derives every document of that source.
+- **Vocabulary.** `knowledge:documentBase` is defined in [`src/vocabulary.ttl`](src/vocabulary.ttl).
 
 ### Mounting it in a host
 
@@ -253,10 +290,10 @@ small pure function, a SPARQL composer or a call to a model.
 |---|---|---|---|---|
 | source declaration | `urn:knowledge:source:name:{s}` | **ATOM** (config) | a Turtle file in the config home: which resources to ingest, their lift, their authority rank, the corpus they belong to | **live** |
 | corpus | `urn:knowledge:corpus:name:{c}` | list of names | the sources a corpus holds; a corpus is also a corridor (below). Today a Turtle file in the config home, `knowledge/corpus/{c}.ttl`, read by the graph list; not served at its own name yet | planned, ledger #3857 |
-| document | `urn:knowledge:document:source:{s}:id:{d}` | alias rule | onto the underlying resource: `urn:file:…`, `urn:iki:ledger:item:N`, `urn:repo:{repo}:file:…` | planned, ledger #3857 |
+| document | `urn:knowledge:document:source:{s}:id:{d}` | alias rule | onto the underlying resource: the source declaration's `knowledge:documentBase` followed by `{d}`, a pass-through in the target's media type; cached under the declaration's and the target's threads. Over files in the config home today (`urn:knowledge:file:path:…`); `urn:iki:ledger:item:N` and `urn:repo:{repo}:file:…` targets are ledger #3857 | **live** (files), planned, ledger #3857 |
 | lift | `urn:knowledge:lift:document:{d}` | transreption | the document's structure as RDF: ikigai-markdown's generic lift plus a mapping resource; the ledger's own Turtle as is; HTML through ikigai-html; PDF and slides by a text transreptor that keeps page and offsets; a database by an R2RML/RML mapping resource | planned, ledger #3857, #3860, #3861 |
 | chunking rule | `urn:knowledge:chunking:name:{n}` | **ATOM** (config) | a Turtle file in the config home, `knowledge/chunking/{n}.ttl`: paragraphs packed into passages of at most `knowledge:maxCharacters` | **live** |
-| chunk list | `urn:knowledge:chunk:document:{d}:chunking:{n}` | list of names | a document's passages under a rule, in document order; cached under the document's and the rule's threads. Over files in the config home today; repository trees and lifts are ledger #3857 | **live** (files), planned, ledger #3857 |
+| chunk list | `urn:knowledge:chunk:document:{d}:chunking:{n}` | list of names | a document's passages under a rule, in document order; cached under the document's and the rule's threads. Over files in the config home and source documents over them today; repository trees and lifts are ledger #3857 | **live** (files), planned, ledger #3857 |
 | passage | `urn:knowledge:passage:document:{d}:range:{start}-{end}` | tiny pure function | a slice of the document's text, in characters, end exclusive. Over files in the config home today; a slice of the lift's text once lifts land | **live** (files), planned, ledger #3857 |
 | prompt | `urn:knowledge:prompt:name:{n}` | resource | the extraction and answer prompts are files, versioned, golden-threaded | planned, ledger #3858 |
 | ontology | `urn:knowledge:ontology:name:{n}` | resource | SHACL shapes the extracted entities and relations must satisfy | planned, ledger #3858 |
