@@ -166,8 +166,7 @@ impl Endpoint for RevisionEndpoint {
                 return Err(Error::NotFound(format!(
                     "revision {revision} of `{document}` was not archived: nothing serves \
                      {file} in this kernel; a host archives revisions by binding a writable \
-                     file module at {}{{path}} over the config home's knowledge directory",
-                    FILE_PREFIX
+                     file module at {FILE_PREFIX}{{path}} over the config home's knowledge directory"
                 )))
             }
             Err(e) => return Err(e),
