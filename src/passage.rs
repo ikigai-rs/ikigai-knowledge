@@ -166,6 +166,16 @@ fn document_arg(inv: &Invocation<'_>) -> Result<String> {
             .all(|s| !s.is_empty() && s != "." && s != "..")
         && !path.chars().any(|c| c.is_control() || c.is_whitespace());
     let ok = file || split_alias(d).is_some();
+    if ok && !names_its_passages(d) {
+        return Err(Error::InvalidArgument {
+            name: "d".to_string(),
+            detail: format!(
+                "`{d}` has no passage names: a passage is named {d}:range:{{start}}-{{end}}, \
+                 which is read as another document while the path holds `:range:` or ends \
+                 in `:range`; rename the file or the id"
+            ),
+        });
+    }
     if ok && Iri::parse(d.to_string()).is_ok() {
         Ok(d.to_string())
     } else {
@@ -178,6 +188,14 @@ fn document_arg(inv: &Invocation<'_>) -> Result<String> {
             ),
         })
     }
+}
+
+/// Whether the passage names of `document` read back as `document`: [`PASSAGE_TEMPLATE`]
+/// splits `{d}` at its first `:range:`, so a path that holds one (`docs/x:range:0-3`), or
+/// ends in a way that makes one with the separator (`docs/x:range`), would be listed under
+/// names that address another document, or none.
+fn names_its_passages(document: &str) -> bool {
+    format!("{document}:range:").find(":range:") == Some(document.len())
 }
 
 /// The rule `{n}` names, refusing a caller who may not read it.

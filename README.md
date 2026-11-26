@@ -200,10 +200,12 @@ source urn:knowledge:passage:document:urn:knowledge:file:path:docs/README.md:ran
 - **Authority.** The rule and the chunk list take `urn:cap:knowledge:read:chunking:name:{n}`;
   all three read the files through the kernel, so the caller also needs read authority over
   them (with `ikigai-fs`, a `urn:cap:fs:read:` grant).
-- **Errors.** A range that ends before it starts is `InvalidArgument` naming `end`; one past
-  the text is `NotFound` saying how many characters the document has. A missing document or
-  rule is `NotFound` naming it; a rule that does not state `maxCharacters` exactly once, as a
-  whole number in range, is refused naming its file.
+- **Errors.** A document whose path holds `:range:` or ends in `:range` is `InvalidArgument`
+  naming `d`: a passage name splits `{d}` at its first `:range:`, so its passages would be
+  listed under names that do not read back. A range that ends before it starts is
+  `InvalidArgument` naming `end`; one past the text is `NotFound` saying how many characters
+  the document has. A missing document or rule is `NotFound` naming it; a rule that does not
+  state `maxCharacters` exactly once, as a whole number in range, is refused naming its file.
 - **Golden threads.** Each answer is cached under the threads of the files it read: a passage
   and a chunk list under the document's file, a chunk list also under the rule's. A changed
   file re-derives only its own passages, and every other document's stay cached

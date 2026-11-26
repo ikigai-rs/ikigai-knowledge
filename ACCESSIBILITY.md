@@ -72,8 +72,10 @@ words, the tests pin those lines exactly, and this file says what has not been t
   chunk list as passage names, one per line in document order, an empty body for a document
   with no text; and a passage as the document's own characters, unchanged. Their refusals each
   name what was wrong: a document outside the mount (`InvalidArgument` naming `d`), an offset
-  that is not a whole number (`InvalidArgument` naming `start` or `end`), a range that ends
-  before it starts (`InvalidArgument` naming `end`), a range past the text (`NotFound` with the
+  that is not a whole number (`InvalidArgument` naming `start` or `end`), a document whose path
+  holds `:range:` or ends in `:range`, so its passage names would not read back
+  (`InvalidArgument` naming `d` and saying to rename the file), a range that ends before it
+  starts (`InvalidArgument` naming `end`), a range past the text (`NotFound` with the
   document's length), a missing document or rule (`NotFound` naming it), a rule the caller may
   not read (`Denied` naming the scope), and a rule without one whole `maxCharacters` (refused
   naming its file). `tests/passage.rs` pins the rule's sentence, the list and the passages

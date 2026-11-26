@@ -251,3 +251,19 @@ fn refusals_name_what_was_wrong() {
         other => panic!("expected a refusal naming the file, got {other:?}"),
     }
 }
+
+#[test]
+fn an_alias_whose_passage_names_would_not_read_back_is_refused() {
+    let scratch = home();
+    let kernel = kernel(&scratch);
+    let cap = caller(&scratch);
+    for id in ["x:range:0-3", "x:range"] {
+        match issue(&kernel, chunks(&alias(id)), &cap) {
+            Err(Error::InvalidArgument { name, detail }) => {
+                assert_eq!(name, "d", "{id}: {detail}");
+                assert!(detail.contains("has no passage names"), "{detail}");
+            }
+            other => panic!("{id}: expected InvalidArgument naming d, got {other:?}"),
+        }
+    }
+}

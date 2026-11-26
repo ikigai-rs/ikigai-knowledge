@@ -9,7 +9,7 @@
 <https://ikigai-rs.dev/ns/knowledge> a owl:Ontology ;
     rdfs:label "ikigai-knowledge vocabulary"@en ;
     rdfs:comment "Terms for grounded, cited answers over an organization's documents, served as ikigai resources."@en ;
-    owl:versionInfo "0.1.1" .
+    owl:versionInfo "0.1.2" .
 
 knowledge:truncated a rdf:Property ;
     rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
