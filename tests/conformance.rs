@@ -22,7 +22,7 @@ use common::*;
 use ikigai_conformance::{Expected, Fixture, Suite};
 use ikigai_core::Verb;
 
-const OWN: [&str; 9] = [
+const OWN: [&str; 11] = [
     ikigai_knowledge::SOURCE_ID,
     ikigai_knowledge::GRAPH_ID,
     ikigai_knowledge::ENTITY_ID,
@@ -32,6 +32,8 @@ const OWN: [&str; 9] = [
     ikigai_knowledge::CHUNK_ID,
     ikigai_knowledge::PASSAGE_ID,
     ikigai_knowledge::DOCUMENT_ID,
+    ikigai_knowledge::REVISION_ID,
+    ikigai_knowledge::PASSAGE_AT_ID,
 ];
 
 /// The store's endpoints, bound beside the module.
@@ -97,6 +99,7 @@ fn conforms() {
             .binding("s", "docs")
             .binding("d", "example.md")
     };
+    let revision = ikigai_knowledge::revision_of("# Example\n\nOne paragraph.\n");
     let chunking = |cap: Option<ikigai_core::Capability>| {
         let f = Fixture::new(ikigai_knowledge::CHUNKING_ID, Verb::Source).binding("n", "example");
         match cap {
@@ -164,6 +167,8 @@ fn conforms() {
         // The work ledger's own vocabulary, which the entity and neighborhood faces carry
         // as is: the ledger's lift is the identity.
         .namespace("https://ikigai-rs.dev/ns/ledger#")
+        // The module's own terms, held to the graph it ships rather than waived.
+        .vocabulary(ikigai_knowledge::VOCABULARY)
         .cacheable(ikigai_knowledge::SOURCE_ID)
         .cacheable(ikigai_knowledge::GRAPH_ID)
         .cacheable(ikigai_knowledge::ENTITY_ID)
@@ -176,10 +181,20 @@ fn conforms() {
         .cacheable(ikigai_knowledge::DOCUMENT_ID)
         .fixture(aliased())
         .enforced_under(aliased().capability(reader(&scratch, "another")))
+        .cacheable(ikigai_knowledge::REVISION_ID)
+        .cacheable(ikigai_knowledge::PASSAGE_AT_ID)
         .fixture(chunking(None))
         .fixture(chunks())
         .fixture(
             Fixture::new(ikigai_knowledge::PASSAGE_ID, Verb::Source)
+                .binding("d", &document)
+                .binding("start", "0")
+                .binding("end", "9"),
+        )
+        .fixture(Fixture::new(ikigai_knowledge::REVISION_ID, Verb::Source).binding("d", &document))
+        .fixture(
+            Fixture::new(ikigai_knowledge::PASSAGE_AT_ID, Verb::Source)
+                .binding("r", &revision)
                 .binding("d", &document)
                 .binding("start", "0")
                 .binding("end", "9"),
@@ -213,11 +228,14 @@ fn conforms() {
         .run_blocking(&kernel);
     eprintln!("{report}");
     report.assert_clean_with(&Expected::new().walked(OWN));
-    // Exactly two actions are unprobed, each by one check. BODIES for the trail: it is live
+    // Exactly three actions are unprobed, each by one check. BODIES for the trail: it is live
     // by decision (a model drafts it), so two independent calls cannot be compared byte for
     // byte. OUTPUTS for the document: a declared pass-through whose face is the target's,
     // which the walk cannot resolve from a binding; `tests/document.rs` holds the served
-    // type to the target's. Every other endpoint is observed by every check.
+    // type to the target's. OUTPUTS for the revision's Sink, which archives a revision: it
+    // takes no `content` (it writes the document's own text), so the walk never fires it;
+    // `tests/revision.rs` fires it and reads what it serves. Every other endpoint is observed
+    // by every check.
     let unprobed: Vec<(String, ikigai_conformance::Check)> = report
         .unprobed
         .iter()
@@ -234,6 +252,10 @@ fn conforms() {
                 ikigai_knowledge::DOCUMENT_ID.to_string(),
                 ikigai_conformance::Check::Outputs
             ),
+            (
+                ikigai_knowledge::REVISION_ID.to_string(),
+                ikigai_conformance::Check::Outputs
+            )
         ],
         "{report}"
     );

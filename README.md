@@ -26,7 +26,8 @@ only by a person's verdict or a stated rule.
 **Status: a scaffold.** These resources exist today: the source declaration; over the work
 ledger, the first source, a corpus's graphs, an entity, a bounded neighborhood and a decision
 trail, the first cited answer; and over files, a source's document by its id, a chunking
-rule, a document's passages under it and one passage. The map below is the
+rule, a document's passages under it, one passage, a document's revision and a passage as of a
+revision, which a persistent HTTP IRI reaches through ikigai-name. The map below is the
 contract the rest is built to; each planned row names the ledger item that builds it.
 
 ## Use it today
@@ -249,6 +250,73 @@ source urn:knowledge:chunk:document:urn:knowledge:document:source:docs:id:guide/
   declaration re-derives every document of that source.
 - **Vocabulary.** `knowledge:documentBase` is defined in [`src/vocabulary.ttl`](src/vocabulary.ttl).
 
+### Citations that stay put
+
+A passage name is a range of the document's CURRENT text, so it moves when the document
+changes: a citation made with it can later point at different words, and nothing says so.
+A citation meant to be checked later names the document's **revision** as well:
+
+```text
+sink   urn:knowledge:revision:document:urn:knowledge:file:path:docs/README.md
+source urn:knowledge:passage:revision:{r}:document:urn:knowledge:file:path:docs/README.md:range:0-412
+source urn:knowledge:passage:revision:{r}:document:urn:knowledge:file:path:docs/README.md:range:0-412 as=text/turtle
+```
+
+- **Revision.** `urn:knowledge:revision:document:{d}` answers the document's revision: the
+  BLAKE3 digest of its text, named with its algorithm (`blake3-` and 64 lowercase hex
+  digits, so a later algorithm can sit beside it), one line. `Source` only reads it (cached
+  under the document's thread). `Sink` also **archives** the text, content-addressed, at
+  `urn:knowledge:file:path:revision/{r}.txt` (the config home's `knowledge/revision/{r}.txt`),
+  written through the kernel with `if-none-match=*`, so an archive is never overwritten.
+  Whoever cites sinks first, then mints the name (`passage_at_iri`).
+- **Passage as of a revision.** `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}`
+  is the text of revision `{r}` from `{start}` to `{end}`. The text face reads the archive
+  when there is one, so an edit to the document never recomputes it, and the document only
+  while it is still that revision and nothing is archived; the Turtle face also reads the
+  current document, to find the current passage. An archive whose digest is
+  not `{r}` is refused, never served as that revision. `text/plain` is the text exactly.
+- **Its Turtle face** (`as=text/turtle`) is the [Web Annotation](https://www.w3.org/TR/annotation-model/)
+  target: an `oa:SpecificResource` whose `oa:hasSource` is the document, with an
+  `oa:TextQuoteSelector` (`oa:exact`, and up to 32 characters of `oa:prefix` and `oa:suffix`)
+  and an `oa:TextPositionSelector` (`oa:start` inclusive, `oa:end` exclusive, characters of
+  that revision), and `knowledge:revision`. **The current version is one link away:**
+  `knowledge:currentPassage` names the passage of the current text holding the same words,
+  found by the quote selector (exact with its prefix and suffix, else exact where it occurs
+  once), and is absent when the words are gone; `oa:hasSource` is the current document.
+- **A persistent HTTP IRI.** ikigai-name answers it with a 302, as data in its registry: a
+  `redirect` claim whose rule maps `passage/revision/{revision}/range/{range}/path/{path*}`
+  onto the URL the host serves the knowledge kernel's resources at. Every level of the path
+  is partitioned by a named key. `persistent_path` gives the path under the prefix, each
+  segment of `{path}` percent-encoded by core's RFC 6570 expansion (the encoding ikigai-name
+  gives a capture), so
+  `https://{name host}/knowledge/passage/revision/{r}/range/{start}-{end}/path/{path}`
+  redirects to the passage as of `{r}`:
+
+  ```json
+  {"prefix": "knowledge", "owner": "urn:cap:name:admin:knowledge",
+   "strategy": "redirect", "target": "https://knowledge.example/", "status": 302,
+   "rules": [{"match": "passage/revision/{revision}/range/{range}/path/{path*}",
+              "target": "https://knowledge.example/urn:knowledge:passage:revision:{revision}:document:urn:knowledge:file:path:{path}:range:{range}"}]}
+  ```
+
+  `tests/revision.rs` resolves such an IRI through ikigai-name's own space, after the document
+  has changed, and follows the 302 to the exact cited words. 302 because the name is logical
+  and its target may move; the name, `{r}` and the range never do.
+- **Authority.** Every face takes the file read (with `ikigai-fs`, a `urn:cap:fs:read:`
+  grant). Archiving also takes the write, `urn:cap:fs:write:*`, judged by path where the
+  archive is written; a later reader needs only the read.
+- **Errors.** A revision that is not `blake3-` and 64 lowercase hex digits (a bare digest
+  included) is `InvalidArgument` naming `r`;
+  the range refusals are a passage's, counted in the revision's characters. A revision that
+  is neither the document's current one nor archived is `NotFound`, saying so and naming the
+  current document. A Sink that finds a different text already archived under the revision
+  is `Conflict`, saying it was not archived and naming the digest found; the archive is
+  left as it was.
+- **Not built yet.** Revisions of documents other than files in the config home (a commit of a
+  repository tree through `urn:repo:*`, the ledger's append-only record) and the as-of corridor
+  over lifts (ledger #3049); the trail still cites ledger subjects, which are not files, and
+  the planned `answer` (ledger #3859) is what mints these names for files.
+
 ### Mounting it in a host
 
 The space is configuration-free and names itself `urn:iki:space:knowledge`. This crate opens no
@@ -295,6 +363,8 @@ small pure function, a SPARQL composer or a call to a model.
 | chunking rule | `urn:knowledge:chunking:name:{n}` | **ATOM** (config) | a Turtle file in the config home, `knowledge/chunking/{n}.ttl`: paragraphs packed into passages of at most `knowledge:maxCharacters` | **live** |
 | chunk list | `urn:knowledge:chunk:document:{d}:chunking:{n}` | list of names | a document's passages under a rule, in document order; cached under the document's and the rule's threads. Over files in the config home and source documents over them today; repository trees and lifts are ledger #3857 | **live** (files), planned, ledger #3857 |
 | passage | `urn:knowledge:passage:document:{d}:range:{start}-{end}` | tiny pure function | a slice of the document's text, in characters, end exclusive. Over files in the config home today; a slice of the lift's text once lifts land | **live** (files), planned, ledger #3857 |
+| revision | `urn:knowledge:revision:document:{d}` | tiny pure function, and a Sink | the BLAKE3 digest of the document's text, tagged `blake3-{hex}`; `Sink` archives the text, content-addressed, at `urn:knowledge:file:path:revision/{r}.txt`, never overwriting one. Over files in the config home today; a repository commit is ledger #3049 | **live** (files) |
+| passage as of a revision | `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}` | tiny pure function | the text of revision `{r}`, from the document or its archive, checked against `{r}`; its Turtle face a Web Annotation target with quote and position selectors and `knowledge:currentPassage`; behind a persistent HTTP IRI that ikigai-name 302s to it (above) | **live** (files) |
 | prompt | `urn:knowledge:prompt:name:{n}` | resource | the extraction and answer prompts are files, versioned, golden-threaded | planned, ledger #3858 |
 | ontology | `urn:knowledge:ontology:name:{n}` | resource | SHACL shapes the extracted entities and relations must satisfy | planned, ledger #3858 |
 | draft | `urn:knowledge:draft:passage:{p}:model:{m}` | composition | `urn:llm:ask` over passage and prompt; the result SHACL-checked against the ontology; stored as `oa:` annotations with provenance; cacheable by input | planned, ledger #3858 |
@@ -338,6 +408,8 @@ written up in [docs/vector-design.md](docs/vector-design.md).
   There is nothing to filter afterward.
 - **Temporal (as-of).** "What did we know on 2026-10-01": git history and the ledger's
   append-only record make this real for the first corpus, as an as-of corridor over the lifts.
+  A passage as of a revision is the first piece: one cited passage, pinned by its document's
+  digest and archived when it is cited.
 - **Model.** Which model drafts is context, never an argument threaded everywhere.
 - **Sealed.** Verdicts (no model writes one), source declarations (configuration, not a model's
   choice), and the citation check (no answer bypasses it).

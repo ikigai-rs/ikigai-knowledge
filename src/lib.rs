@@ -111,6 +111,7 @@ use std::collections::BTreeMap;
 mod document;
 mod graph;
 mod passage;
+mod revision;
 mod trail;
 pub use document::{document_iri, DOCUMENT_BASE, DOCUMENT_ID, DOCUMENT_PREFIX, DOCUMENT_TEMPLATE};
 pub use graph::{
@@ -123,6 +124,11 @@ pub use passage::{
     chunk, chunking_scope, passage_iri, CHUNKING_ID, CHUNKING_PREFIX, CHUNKING_READ,
     CHUNKING_READ_PREFIX, CHUNKING_TEMPLATE, CHUNK_ID, CHUNK_PREFIX, CHUNK_TEMPLATE,
     MAX_CHARACTERS, MAX_PASSAGE, PASSAGE_ID, PASSAGE_PREFIX, PASSAGE_TEMPLATE,
+};
+pub use revision::{
+    passage_at_iri, persistent_path, revision_file, revision_of, CURRENT_PASSAGE, FS_WRITE,
+    PASSAGE_AT_ID, PASSAGE_AT_PREFIX, PASSAGE_AT_TEMPLATE, QUOTE_CONTEXT, REVISION,
+    REVISION_ALGORITHM, REVISION_ID, REVISION_PREFIX, REVISION_TEMPLATE,
 };
 pub use trail::{
     ABSTAINED, LLM_ASK, LLM_USE, MIN_QUOTE, REMOVED_CLAIMS, TRAIL_DEPTH, TRAIL_ENTITIES, TRAIL_ID,
@@ -221,6 +227,15 @@ pub fn space() -> EndpointSpace {
         .bind(
             UriTemplate::parse(PASSAGE_TEMPLATE).expect("PASSAGE_TEMPLATE is a valid template"),
             passage::PassageEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(REVISION_TEMPLATE).expect("REVISION_TEMPLATE is a valid template"),
+            revision::RevisionEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(PASSAGE_AT_TEMPLATE)
+                .expect("PASSAGE_AT_TEMPLATE is a valid template"),
+            revision::PassageAtEndpoint,
         )
         .named(ikigai_core::space_iri("knowledge"))
 }
