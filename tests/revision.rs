@@ -66,6 +66,11 @@ fn cite(kernel: &Kernel, scratch: &Scratch) -> (String, String) {
         .expect("the revision is archived");
     let revision = text(&archived).trim().to_string();
     assert_eq!(revision, ikigai_knowledge::revision_of(A));
+    // The digest names its algorithm wherever it goes: in the answer, the names and the path.
+    assert_eq!(
+        revision,
+        format!("blake3-{}", blake3::hash(A.as_bytes()).to_hex())
+    );
     let source =
         text(&issue(kernel, get(&revision_iri(&a)), &later_reader(scratch)).expect("the revision"));
     assert_eq!(
@@ -214,6 +219,50 @@ fn an_archive_that_is_not_its_revision_is_refused() {
 }
 
 #[test]
+fn a_tampered_archive_is_not_reported_as_archived() {
+    let scratch = Scratch::new("revision-tampered-sink");
+    write(&scratch, "docs/a.md", A);
+    let kernel = kernel(&scratch);
+    let revision = ikigai_knowledge::revision_of(A);
+    write(&scratch, &format!("revision/{revision}.txt"), A_LATER);
+    let sink = at(Verb::Sink, &revision_iri(&doc("docs/a.md")));
+    match issue(&kernel, sink, &citer(&scratch)) {
+        Err(Error::Conflict(why)) => {
+            assert!(why.contains("was not archived"), "{why}");
+            assert!(why.contains("holds other text"), "{why}");
+        }
+        other => panic!("expected a Conflict, got {other:?}"),
+    }
+    let archive = scratch.knowledge().join(format!("revision/{revision}.txt"));
+    assert_eq!(
+        std::fs::read_to_string(archive).expect("the archive"),
+        A_LATER,
+        "left as it was"
+    );
+}
+
+#[test]
+fn the_text_face_of_an_archived_revision_reads_only_the_archive() {
+    let scratch = Scratch::new("revision-text-face");
+    write(&scratch, "docs/a.md", A);
+    let kernel = kernel(&scratch);
+    let cap = later_reader(&scratch);
+    let (_, cited) = cite(&kernel, &scratch);
+    // The document is now unreadable as text: a face that read it would fail.
+    std::fs::write(scratch.knowledge().join("docs/a.md"), [0xff, 0xfe, 0x00]).expect("write");
+    kernel.cut(doc("docs/a.md").as_str());
+    assert_eq!(
+        text(&issue(&kernel, get(&cited), &cap).expect("from the archive alone")),
+        "The first file says one thing."
+    );
+    // The Turtle face names the current passage, so it does read the document.
+    assert!(matches!(
+        issue(&kernel, turtle(&cited), &cap),
+        Err(Error::Endpoint(_))
+    ));
+}
+
+#[test]
 fn archiving_takes_the_write_and_never_overwrites() {
     let scratch = Scratch::new("revision-write");
     write(&scratch, "docs/a.md", A);
@@ -241,11 +290,15 @@ fn refusals_name_what_was_wrong() {
     let cap = later_reader(&scratch);
     let a = doc("docs/a.md");
     let r = ikigai_knowledge::revision_of(A);
-    let bad = get(&ikigai_knowledge::passage_at_iri("ABC", &a, 0, 4));
-    assert!(matches!(
-        issue(&kernel, bad, &cap),
-        Err(Error::InvalidArgument { name, .. }) if name == "r"
-    ));
+    // Not a revision: garbage, and a bare digest that does not name its algorithm.
+    let bare = r.strip_prefix("blake3-").expect("tagged").to_string();
+    for bad in ["ABC", bare.as_str()] {
+        let bad = get(&ikigai_knowledge::passage_at_iri(bad, &a, 0, 4));
+        assert!(matches!(
+            issue(&kernel, bad, &cap),
+            Err(Error::InvalidArgument { name, .. }) if name == "r"
+        ));
+    }
     let empty = get(&ikigai_knowledge::passage_at_iri(&r, &a, 4, 4));
     assert!(matches!(
         issue(&kernel, empty, &cap),
@@ -270,12 +323,13 @@ fn refusals_name_what_was_wrong() {
 /// Where a host serves the knowledge kernel's resources over HTTP, in this test.
 const KNOWLEDGE_BASE: &str = "https://knowledge.example/";
 
-/// The operator's claim: `knowledge/passage/...` redirects, 302, to the as-of passage.
+/// The operator's claim: `knowledge/passage/revision/{r}/range/{range}/path/{path}`
+/// redirects, 302, to the as-of passage.
 const REGISTRY: &str = r#"{"namespaces":[{
     "prefix": "knowledge", "owner": "urn:cap:name:admin:knowledge",
     "strategy": "redirect", "target": "https://knowledge.example/", "status": 302,
     "rules": [{
-        "match": "passage/{revision}/{range}/{path*}",
+        "match": "passage/revision/{revision}/range/{range}/path/{path*}",
         "target": "https://knowledge.example/urn:knowledge:passage:revision:{revision}:document:urn:knowledge:file:path:{path}:range:{range}"
     }]
 }]}"#;
@@ -288,6 +342,11 @@ fn the_persistent_iri_is_a_302_to_the_passage_as_of_its_revision() {
     let (revision, cited) = cite(&kernel, &scratch);
     let path = ikigai_knowledge::persistent_path(&revision, &doc("docs/a.md"), 9, 39)
         .expect("a file document has a persistent path");
+    assert_eq!(
+        path,
+        format!("passage/revision/{revision}/range/9-39/path/docs/a.md"),
+        "every level is partitioned by a named key"
+    );
     change(&kernel, &scratch, A_LATER);
 
     let registry = FnEndpoint::new("registry-source", |_: &Invocation<'_>| {

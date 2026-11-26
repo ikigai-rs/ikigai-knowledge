@@ -5,7 +5,8 @@
 //! it may later point at different words. These names do not move.
 //!
 //! - **`urn:knowledge:revision:document:{d}`** is the document's revision: the BLAKE3 digest
-//!   of its text, 64 lowercase hex digits. `Source` answers it. `Sink` also archives the
+//!   of its text, named with its algorithm, `blake3-` and 64 lowercase hex digits. `Source`
+//!   answers it. `Sink` also archives the
 //!   text, content-addressed, at `urn:knowledge:file:path:revision/{r}.txt` (the config
 //!   home's `knowledge/revision/{r}.txt`), written through the kernel, never over a
 //!   different archive.
@@ -21,8 +22,8 @@
 
 use async_trait::async_trait;
 use ikigai_core::{
-    ActionSpec, ArgRef, ArgSpec, Description, Endpoint, Error, Invocation, Iri, ReprType,
-    Representation, Request, Result, Verb,
+    ActionSpec, ArgRef, ArgSpec, Bindings, Description, Endpoint, Error, Invocation, Iri, ReprType,
+    Representation, Request, Result, UriTemplate, Verb,
 };
 use oxrdf::{Literal, NamedNode, Triple};
 use oxttl::TurtleSerializer;
@@ -52,6 +53,10 @@ pub const REVISION: &str = "https://ikigai-rs.dev/ns/knowledge#revision";
 /// On an as-of passage: the passage of the document's current text with the same words.
 pub const CURRENT_PASSAGE: &str = "https://ikigai-rs.dev/ns/knowledge#currentPassage";
 
+/// The algorithm tag every revision starts with: a digest never leaves this crate without
+/// naming its algorithm.
+pub const REVISION_ALGORITHM: &str = "blake3-";
+
 /// How many characters of context a `TextQuoteSelector`'s prefix and suffix carry.
 pub const QUOTE_CONTEXT: usize = 32;
 
@@ -61,21 +66,26 @@ const OA: &str = "http://www.w3.org/ns/oa#";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 const XSD_NON_NEGATIVE: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
 
-/// The revision of a document whose text is `text`: its BLAKE3 digest, in lowercase hex.
+/// The revision of a document whose text is `text`: its BLAKE3 digest, named with its
+/// algorithm: `blake3-` and 64 lowercase hex digits.
 ///
 /// ```
 /// let r = ikigai_knowledge::revision_of("# Alpha\n");
-/// assert_eq!(r.len(), 64);
+/// assert!(r.starts_with("blake3-"));
+/// assert_eq!(r.len(), "blake3-".len() + 64);
 /// assert_ne!(r, ikigai_knowledge::revision_of("# Alpha, edited\n"));
 /// ```
 pub fn revision_of(text: &str) -> String {
-    blake3::hash(text.as_bytes()).to_hex().to_string()
+    format!(
+        "{REVISION_ALGORITHM}{}",
+        blake3::hash(text.as_bytes()).to_hex()
+    )
 }
 
 /// The name of the passage of `document` from `start` to `end` as of `revision`.
 ///
 /// ```
-/// let r = "0".repeat(64);
+/// let r = format!("blake3-{}", "0".repeat(64));
 /// assert_eq!(
 ///     ikigai_knowledge::passage_at_iri(&r, "urn:knowledge:file:path:docs/a.md", 0, 12),
 ///     format!(
@@ -88,27 +98,48 @@ pub fn passage_at_iri(revision: &str, document: &str, start: usize, end: usize) 
 }
 
 /// The path of an as-of passage under a persistent-naming namespace (an ikigai-name
-/// `redirect` claim): `passage/{r}/{start}-{end}/{path}`, for a file document
-/// `urn:knowledge:file:path:{path}`. `None` for any other document.
+/// `redirect` claim), for a file document `urn:knowledge:file:path:{path}`: every level is
+/// partitioned by a named key, `passage/revision/{r}/range/{start}-{end}/path/{path}`.
+/// `None` for any other document.
+///
+/// Each segment of `{path}` is percent-encoded by core's RFC 6570 expansion
+/// ([`UriTemplate::expand_encoded`], the same encoding ikigai-name gives a capture), and
+/// its `/` separators stay.
 ///
 /// ```
-/// let r = "0".repeat(64);
+/// let r = format!("blake3-{}", "0".repeat(64));
 /// assert_eq!(
 ///     ikigai_knowledge::persistent_path(&r, "urn:knowledge:file:path:docs/a.md", 0, 12),
-///     Some(format!("passage/{r}/0-12/docs/a.md"))
+///     Some(format!("passage/revision/{r}/range/0-12/path/docs/a.md"))
+/// );
+/// assert_eq!(
+///     ikigai_knowledge::persistent_path(&r, "urn:knowledge:file:path:notes/caf\u{e9} 1?.md", 0, 12),
+///     Some(format!("passage/revision/{r}/range/0-12/path/notes/caf%C3%A9%201%3F.md"))
 /// );
 /// assert_eq!(ikigai_knowledge::persistent_path(&r, "urn:iki:ledger:item:1", 0, 12), None);
 /// ```
 pub fn persistent_path(revision: &str, document: &str, start: usize, end: usize) -> Option<String> {
     let path = document.strip_prefix(FILE_PREFIX)?;
-    Some(format!("passage/{revision}/{start}-{end}/{path}"))
+    let template = UriTemplate::parse("{s}").ok()?;
+    let path = path
+        .split('/')
+        .map(|segment| {
+            let mut value = Bindings::new();
+            value.insert("s".to_string(), segment.to_string());
+            template.expand_encoded(&value)
+        })
+        .collect::<Option<Vec<_>>>()?
+        .join("/");
+    Some(format!(
+        "passage/revision/{revision}/range/{start}-{end}/path/{path}"
+    ))
 }
 
 /// Where the text of `revision` is archived: a file under the config home's `knowledge`
 /// directory, named by its digest.
 ///
 /// ```
-/// let r = "0".repeat(64);
+/// let r = format!("blake3-{}", "0".repeat(64));
 /// assert_eq!(
 ///     ikigai_knowledge::revision_file(&r),
 ///     format!("urn:knowledge:file:path:revision/{r}.txt")
@@ -118,20 +149,21 @@ pub fn revision_file(revision: &str) -> String {
     format!("{FILE_PREFIX}revision/{revision}.txt")
 }
 
-/// The revision `{r}` names: 64 lowercase hex digits.
+/// The revision `{r}` names: `blake3-` and 64 lowercase hex digits.
 fn revision_arg(inv: &Invocation<'_>) -> Result<String> {
     let r = inv
         .bindings
         .get("r")
         .ok_or_else(|| Error::MissingArgument("r".to_string()))?;
-    if r.len() == 64 && r.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
+    let digest = r.strip_prefix(REVISION_ALGORITHM).unwrap_or_default();
+    if digest.len() == 64 && digest.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')) {
         Ok(r.to_string())
     } else {
         Err(Error::InvalidArgument {
             name: "r".to_string(),
             detail: format!(
-                "`{r}` is not a revision: use the 64 lowercase hex digits of the document's \
-                 BLAKE3 digest, as {REVISION_PREFIX}{{d}} answers it"
+                "`{r}` is not a revision: use {REVISION_ALGORITHM} and the 64 lowercase hex \
+                 digits of the document's BLAKE3 digest, as {REVISION_PREFIX}{{d}} answers it"
             ),
         })
     }
@@ -160,8 +192,24 @@ impl Endpoint for RevisionEndpoint {
             .with_arg("content", ArgRef::Inline(text.into_bytes()))
             .with_arg("if-none-match", ArgRef::Inline(b"*".to_vec()));
         match inv.issue(write).await {
-            // Already archived: the archive is named by its digest, and every read checks it.
-            Ok(_) | Err(Error::Conflict(_)) => {}
+            Ok(_) => {}
+            // Something is already there: archived only if it reads back as this revision.
+            Err(Error::Conflict(why)) => match read_optional(inv, &file).await? {
+                Some(held) if revision_of(&held) == revision => {}
+                Some(held) => {
+                    return Err(Error::Conflict(format!(
+                        "revision {revision} of `{document}` was not archived: {file} already \
+                         holds other text (its digest is {}), which is never overwritten",
+                        revision_of(&held)
+                    )))
+                }
+                None => {
+                    return Err(Error::Conflict(format!(
+                        "revision {revision} of `{document}` was not archived: writing {file} \
+                         conflicted ({why}) and nothing reads back there"
+                    )))
+                }
+            },
             Err(Error::Unresolved(_)) => {
                 return Err(Error::NotFound(format!(
                     "revision {revision} of `{document}` was not archived: nothing serves \
@@ -187,7 +235,7 @@ impl Endpoint for RevisionEndpoint {
         Description::new(REVISION_ID)
             .title("Knowledge document revision")
             .summary(
-                "A document's revision: the BLAKE3 digest of its text, 64 lowercase hex \
+                "A document's revision: the BLAKE3 digest of its text, blake3- and 64 lowercase hex \
                  digits, one line. {d} is the document's IRI, a file under the config home's \
                  knowledge directory (urn:knowledge:file:path:{path}), read through the kernel. \
                  Source answers it, cached under the document's thread. Sink also archives the \
@@ -262,13 +310,26 @@ impl Endpoint for PassageAtEndpoint {
             });
         }
         let face = face(inv)?;
-        // The document as it is now: the revision itself while it is unchanged, and where the
-        // current passage is found after it changes. A document since removed has no current
-        // text, and the archive still answers.
-        let current = read_optional(inv, &document).await?;
-        let text = match &current {
-            Some(now) if revision_of(now) == revision => now.clone(),
-            _ => read_archive(inv, &document, &revision, current.is_some()).await?,
+        // The text face needs only the revision's text: from its archive when there is one,
+        // so an edit to the document never recomputes it, and from the document only while
+        // nothing is archived. The Turtle face also needs the document as it is now, where
+        // the current passage is found. A document since removed has no current text, and
+        // the archive still answers.
+        let (text, current) = match face {
+            Face::Text => match read_archive(inv, &revision).await? {
+                Some(archived) => (archived, None),
+                None => match read_optional(inv, &document).await? {
+                    Some(now) if revision_of(&now) == revision => (now, None),
+                    now => return Err(unarchived(&document, &revision, now.is_some())),
+                },
+            },
+            Face::Turtle => match read_optional(inv, &document).await? {
+                Some(now) if revision_of(&now) == revision => (now.clone(), Some(now)),
+                now => match read_archive(inv, &revision).await? {
+                    Some(archived) => (archived, now),
+                    None => return Err(unarchived(&document, &revision, now.is_some())),
+                },
+            },
         };
         let length = text.chars().count();
         if end > length {
@@ -333,7 +394,7 @@ impl Endpoint for PassageAtEndpoint {
             .requires(FS_READ)
             .input(binding(
                 "r",
-                "the revision: the document's BLAKE3 digest, 64 lowercase hex digits",
+                "the revision: blake3- and the 64 lowercase hex digits of the document's BLAKE3 digest",
             ))
             .input(binding(
                 "d",
@@ -353,25 +414,26 @@ impl Endpoint for PassageAtEndpoint {
     }
 }
 
-/// The text of `revision` from its archive, refused unless its digest is the revision.
-async fn read_archive(
-    inv: &Invocation<'_>,
-    document: &str,
-    revision: &str,
-    changed: bool,
-) -> Result<String> {
-    let file = revision_file(revision);
+/// Why `revision` of `document` has no text: it is not current, and was not archived.
+fn unarchived(document: &str, revision: &str, changed: bool) -> Error {
     let why = if changed {
         "the document has changed since"
     } else {
         "the document is not there"
     };
+    Error::NotFound(format!(
+        "no revision {revision} of `{document}`: {why}, and that revision was not archived \
+         (a Sink to {REVISION_PREFIX}{document} archives the current one); the current text \
+         is at {document}"
+    ))
+}
+
+/// The text of `revision` from its archive, `None` when nothing is archived, and refused
+/// unless its digest is the revision.
+async fn read_archive(inv: &Invocation<'_>, revision: &str) -> Result<Option<String>> {
+    let file = revision_file(revision);
     let Some(text) = read_optional(inv, &file).await? else {
-        return Err(Error::NotFound(format!(
-            "no revision {revision} of `{document}`: {why}, and that revision was not archived \
-             (a Sink to {REVISION_PREFIX}{document} archives the current one); the current \
-             text is at {document}"
-        )));
+        return Ok(None);
     };
     if revision_of(&text) != revision {
         return Err(Error::Endpoint(format!(
@@ -380,7 +442,7 @@ async fn read_archive(
             revision_of(&text)
         )));
     }
-    Ok(text)
+    Ok(Some(text))
 }
 
 /// Where the quoted words are in `text`, by the `TextQuoteSelector`: the occurrence of

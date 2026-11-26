@@ -263,14 +263,17 @@ source urn:knowledge:passage:revision:{r}:document:urn:knowledge:file:path:docs/
 ```
 
 - **Revision.** `urn:knowledge:revision:document:{d}` answers the document's revision: the
-  BLAKE3 digest of its text, 64 lowercase hex digits, one line. `Source` only reads it (cached
+  BLAKE3 digest of its text, named with its algorithm (`blake3-` and 64 lowercase hex
+  digits, so a later algorithm can sit beside it), one line. `Source` only reads it (cached
   under the document's thread). `Sink` also **archives** the text, content-addressed, at
   `urn:knowledge:file:path:revision/{r}.txt` (the config home's `knowledge/revision/{r}.txt`),
   written through the kernel with `if-none-match=*`, so an archive is never overwritten.
   Whoever cites sinks first, then mints the name (`passage_at_iri`).
 - **Passage as of a revision.** `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}`
-  is the text of revision `{r}` from `{start}` to `{end}`: from the document while it is still
-  that revision, from the archive once it changes or is removed. An archive whose digest is
+  is the text of revision `{r}` from `{start}` to `{end}`. The text face reads the archive
+  when there is one, so an edit to the document never recomputes it, and the document only
+  while it is still that revision and nothing is archived; the Turtle face also reads the
+  current document, to find the current passage. An archive whose digest is
   not `{r}` is refused, never served as that revision. `text/plain` is the text exactly.
 - **Its Turtle face** (`as=text/turtle`) is the [Web Annotation](https://www.w3.org/TR/annotation-model/)
   target: an `oa:SpecificResource` whose `oa:hasSource` is the document, with an
@@ -281,15 +284,18 @@ source urn:knowledge:passage:revision:{r}:document:urn:knowledge:file:path:docs/
   found by the quote selector (exact with its prefix and suffix, else exact where it occurs
   once), and is absent when the words are gone; `oa:hasSource` is the current document.
 - **A persistent HTTP IRI.** ikigai-name answers it with a 302, as data in its registry: a
-  `redirect` claim whose rule maps `passage/{revision}/{range}/{path*}` onto the URL the host
-  serves the knowledge kernel's resources at. `persistent_path` gives the path under the
-  prefix, so `https://{name host}/knowledge/passage/{r}/{start}-{end}/{path}` redirects to the
-  passage as of `{r}`:
+  `redirect` claim whose rule maps `passage/revision/{revision}/range/{range}/path/{path*}`
+  onto the URL the host serves the knowledge kernel's resources at. Every level of the path
+  is partitioned by a named key. `persistent_path` gives the path under the prefix, each
+  segment of `{path}` percent-encoded by core's RFC 6570 expansion (the encoding ikigai-name
+  gives a capture), so
+  `https://{name host}/knowledge/passage/revision/{r}/range/{start}-{end}/path/{path}`
+  redirects to the passage as of `{r}`:
 
   ```json
   {"prefix": "knowledge", "owner": "urn:cap:name:admin:knowledge",
    "strategy": "redirect", "target": "https://knowledge.example/", "status": 302,
-   "rules": [{"match": "passage/{revision}/{range}/{path*}",
+   "rules": [{"match": "passage/revision/{revision}/range/{range}/path/{path*}",
               "target": "https://knowledge.example/urn:knowledge:passage:revision:{revision}:document:urn:knowledge:file:path:{path}:range:{range}"}]}
   ```
 
@@ -299,10 +305,13 @@ source urn:knowledge:passage:revision:{r}:document:urn:knowledge:file:path:docs/
 - **Authority.** Every face takes the file read (with `ikigai-fs`, a `urn:cap:fs:read:`
   grant). Archiving also takes the write, `urn:cap:fs:write:*`, judged by path where the
   archive is written; a later reader needs only the read.
-- **Errors.** A revision that is not 64 lowercase hex digits is `InvalidArgument` naming `r`;
+- **Errors.** A revision that is not `blake3-` and 64 lowercase hex digits (a bare digest
+  included) is `InvalidArgument` naming `r`;
   the range refusals are a passage's, counted in the revision's characters. A revision that
   is neither the document's current one nor archived is `NotFound`, saying so and naming the
-  current document.
+  current document. A Sink that finds a different text already archived under the revision
+  is `Conflict`, saying it was not archived and naming the digest found; the archive is
+  left as it was.
 - **Not built yet.** Revisions of documents other than files in the config home (a commit of a
   repository tree through `urn:repo:*`, the ledger's append-only record) and the as-of corridor
   over lifts (ledger #3049); the trail still cites ledger subjects, which are not files, and
@@ -354,7 +363,7 @@ small pure function, a SPARQL composer or a call to a model.
 | chunking rule | `urn:knowledge:chunking:name:{n}` | **ATOM** (config) | a Turtle file in the config home, `knowledge/chunking/{n}.ttl`: paragraphs packed into passages of at most `knowledge:maxCharacters` | **live** |
 | chunk list | `urn:knowledge:chunk:document:{d}:chunking:{n}` | list of names | a document's passages under a rule, in document order; cached under the document's and the rule's threads. Over files in the config home and source documents over them today; repository trees and lifts are ledger #3857 | **live** (files), planned, ledger #3857 |
 | passage | `urn:knowledge:passage:document:{d}:range:{start}-{end}` | tiny pure function | a slice of the document's text, in characters, end exclusive. Over files in the config home today; a slice of the lift's text once lifts land | **live** (files), planned, ledger #3857 |
-| revision | `urn:knowledge:revision:document:{d}` | tiny pure function, and a Sink | the BLAKE3 digest of the document's text; `Sink` archives the text, content-addressed, at `urn:knowledge:file:path:revision/{r}.txt`, never overwriting one. Over files in the config home today; a repository commit is ledger #3049 | **live** (files) |
+| revision | `urn:knowledge:revision:document:{d}` | tiny pure function, and a Sink | the BLAKE3 digest of the document's text, tagged `blake3-{hex}`; `Sink` archives the text, content-addressed, at `urn:knowledge:file:path:revision/{r}.txt`, never overwriting one. Over files in the config home today; a repository commit is ledger #3049 | **live** (files) |
 | passage as of a revision | `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}` | tiny pure function | the text of revision `{r}`, from the document or its archive, checked against `{r}`; its Turtle face a Web Annotation target with quote and position selectors and `knowledge:currentPassage`; behind a persistent HTTP IRI that ikigai-name 302s to it (above) | **live** (files) |
 | prompt | `urn:knowledge:prompt:name:{n}` | resource | the extraction and answer prompts are files, versioned, golden-threaded | planned, ledger #3858 |
 | ontology | `urn:knowledge:ontology:name:{n}` | resource | SHACL shapes the extracted entities and relations must satisfy | planned, ledger #3858 |
