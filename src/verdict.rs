@@ -156,13 +156,15 @@ pub trait VerdictStore: Send + Sync {
     async fn keep_draft(&self, draft: StoredDraft) -> Result<()>;
     /// The draft kept under `digest`, if any.
     async fn draft(&self, digest: &str) -> Result<Option<StoredDraft>>;
-    /// Keep a document's text at the revision `revision` a draft was served over, so the
-    /// passage a verdict cites still answers after the document changes. Content-addressed:
-    /// keeping the same revision twice keeps one.
-    async fn keep_revision(&self, revision: &str, text: &str) -> Result<()>;
-    /// The text kept at `revision`, if any. The module checks it against `revision` before
-    /// serving it.
-    async fn revision(&self, revision: &str) -> Result<Option<String>>;
+    /// Keep `document`'s text at the revision `revision` a draft was served over, so the
+    /// passage a verdict cites still answers after the document changes. Kept WITH its
+    /// document: the same text under two documents is two entries, and keeping the same
+    /// document's revision twice keeps one.
+    async fn keep_revision(&self, document: &str, revision: &str, text: &str) -> Result<()>;
+    /// The text kept for `document` at `revision`, if any; never a revision kept for another
+    /// document. The module serves it only to a caller the kernel lets read `document`, and
+    /// checks it against `revision` first.
+    async fn revision(&self, document: &str, revision: &str) -> Result<Option<String>>;
 }
 
 /// A [`VerdictStore`] in memory: for tests, and for a host that keeps verdicts no longer than
@@ -178,7 +180,8 @@ pub struct MemoryVerdictStore {
     persons: BTreeSet<String>,
     verdicts: Mutex<BTreeMap<String, Vec<u8>>>,
     drafts: Mutex<BTreeMap<String, StoredDraft>>,
-    revisions: Mutex<BTreeMap<String, String>>,
+    /// Kept revisions by document, then revision.
+    revisions: Mutex<BTreeMap<(String, String), String>>,
 }
 
 impl MemoryVerdictStore {
@@ -236,21 +239,23 @@ impl VerdictStore for MemoryVerdictStore {
         Ok(held.get(digest).cloned())
     }
 
-    async fn keep_revision(&self, revision: &str, text: &str) -> Result<()> {
+    async fn keep_revision(&self, document: &str, revision: &str, text: &str) -> Result<()> {
         if revision_of(text) != revision {
             return Err(Error::Endpoint(format!(
                 "the text offered as revision {revision} has another digest, so it is not kept"
             )));
         }
         let mut held = self.revisions.lock().map_err(poisoned)?;
-        held.entry(revision.to_string())
+        held.entry((document.to_string(), revision.to_string()))
             .or_insert_with(|| text.to_string());
         Ok(())
     }
 
-    async fn revision(&self, revision: &str) -> Result<Option<String>> {
+    async fn revision(&self, document: &str, revision: &str) -> Result<Option<String>> {
         let held = self.revisions.lock().map_err(poisoned)?;
-        Ok(held.get(revision).cloned())
+        Ok(held
+            .get(&(document.to_string(), revision.to_string()))
+            .cloned())
     }
 }
 

@@ -769,7 +769,11 @@ impl Endpoint for DraftEndpoint {
         let trig = draft.to_trig()?;
         if let Some(store) = &self.store {
             store
-                .keep_revision(&draft.revision, &draft.document_text)
+                .keep_revision(
+                    &draft.passage.document,
+                    &draft.revision,
+                    &draft.document_text,
+                )
                 .await?;
             store.keep_draft(draft.stored(trig.clone())).await?;
         }

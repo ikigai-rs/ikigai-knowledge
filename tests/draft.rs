@@ -797,11 +797,20 @@ impl VerdictStore for Racing {
     ) -> ikigai_core::Result<Option<ikigai_knowledge::StoredDraft>> {
         self.0.draft(digest).await
     }
-    async fn keep_revision(&self, revision: &str, text: &str) -> ikigai_core::Result<()> {
-        self.0.keep_revision(revision, text).await
+    async fn keep_revision(
+        &self,
+        document: &str,
+        revision: &str,
+        text: &str,
+    ) -> ikigai_core::Result<()> {
+        self.0.keep_revision(document, revision, text).await
     }
-    async fn revision(&self, revision: &str) -> ikigai_core::Result<Option<String>> {
-        self.0.revision(revision).await
+    async fn revision(
+        &self,
+        document: &str,
+        revision: &str,
+    ) -> ikigai_core::Result<Option<String>> {
+        self.0.revision(document, revision).await
     }
 }
 
@@ -908,6 +917,11 @@ fn a_verdict_cites_the_passage_as_of_the_revision_the_person_judged() {
     let reader = Capability::scoped(reading(&scratch));
     let words = issue(&kernel, request(Verb::Source, &judged, &[]), &reader).expect("as of");
     assert_eq!(text(&words), "Brian decided to adopt oxigraph.");
+    // A document since removed: the reader the grant covers still gets the words judged.
+    std::fs::remove_file(scratch.knowledge().join("docs/decision.md")).expect("remove");
+    let (kernel, _) = host_with(&scratch, OTHER_REPLY, None, kept.clone());
+    let words = issue(&kernel, request(Verb::Source, &judged, &[]), &reader).expect("removed");
+    assert_eq!(text(&words), "Brian decided to adopt oxigraph.");
     // Its persistent HTTP path names the same revision and range.
     let path = persistent_path(&revision_of(DOC), &document, 0, 32).expect("a path");
     assert!(
@@ -917,4 +931,77 @@ fn a_verdict_cites_the_passage_as_of_the_revision_the_person_judged() {
         )),
         "{path}"
     );
+}
+
+/// Hub review of b13a447: the store-backed revision text is served under the caller's read
+/// of the document it was kept with, never around it.
+#[test]
+fn the_kept_revision_answers_only_its_document_and_only_a_caller_who_may_read_it() {
+    let scratch = setup("as-of-guard");
+    let alice = judge(&scratch, ALICE_PERSON);
+    let kept = verdicts();
+    let document = format!("{FILE_PREFIX}docs/decision.md");
+    let revision = revision_of(DOC);
+    {
+        let (kernel, _) = host_with(&scratch, REPLY, None, kept.clone());
+        read_draft(&kernel, None, &alice).expect("the draft, which keeps its revision");
+    }
+    std::fs::write(
+        scratch.knowledge().join("docs/decision.md"),
+        "We have not decided anything yet, and will not soon.\n",
+    )
+    .expect("rewrite");
+    std::fs::write(
+        scratch.knowledge().join("docs/other.md"),
+        "Another document, which never held the judged words.\n",
+    )
+    .expect("another");
+    let (kernel, _) = host_with(&scratch, OTHER_REPLY, None, kept.clone());
+
+    // (a) A caller who may read verdicts, and files elsewhere, but not the document.
+    let elsewhere = Capability::scoped([
+        VERDICT_READ.to_string(),
+        format!(
+            "urn:cap:fs:read:{}",
+            scratch.knowledge().join("revision").display()
+        ),
+    ]);
+    let judged = passage_at_iri(&revision, &document, 0, 32);
+    for face in [None, Some("text/turtle")] {
+        let args: Vec<(&str, &str)> = face.iter().map(|f| ("as", *f)).collect();
+        let refused = issue(&kernel, request(Verb::Source, &judged, &args), &elsewhere);
+        match &refused {
+            Err(Error::Denied(why)) => assert!(
+                why.contains(&format!("you may not read `{document}`"))
+                    || why.contains("capability does not grant"),
+                "{why}"
+            ),
+            other => panic!("refused, not {other:?}"),
+        }
+        assert!(
+            !format!("{refused:?}").contains("Brian decided"),
+            "{refused:?}"
+        );
+    }
+    let text_face = issue(&kernel, request(Verb::Source, &judged, &[]), &elsewhere);
+    assert!(
+        matches!(&text_face, Err(Error::Denied(why)) if why.contains(&format!(
+            "you may not read `{document}`, so its text as of an earlier revision is not shown"
+        ))),
+        "{text_face:?}"
+    );
+
+    // (b) The same revision asked for under another document, by a caller who may read both.
+    let reader = Capability::scoped(reading(&scratch));
+    let other = format!("{FILE_PREFIX}docs/other.md");
+    let elsewhere_doc = passage_at_iri(&revision, &other, 0, 32);
+    let refused = issue(&kernel, request(Verb::Source, &elsewhere_doc, &[]), &reader);
+    assert!(
+        matches!(&refused, Err(Error::NotFound(why)) if why.contains("was not archived")),
+        "{refused:?}"
+    );
+
+    // (c) The caller who holds the read gets the words judged.
+    let words = issue(&kernel, request(Verb::Source, &judged, &[]), &reader).expect("as of");
+    assert_eq!(text(&words), "Brian decided to adopt oxigraph.");
 }

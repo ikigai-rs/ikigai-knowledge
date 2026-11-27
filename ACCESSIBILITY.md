@@ -100,7 +100,10 @@ words, the tests pin those lines exactly, and this file says what has not been t
   nor archived (`NotFound` saying the document changed or is gone, that the revision was not
   archived, how to archive one and where the current text is), an archive whose digest is not
   its name (refused, naming both digests), a Sink that finds other text already archived
-  (`Conflict` saying the revision was not archived, naming the digest found), a face that does not exist (`InvalidArgument` naming
+  (`Conflict` saying the revision was not archived, naming the digest found), text the
+  host's verdict store kept for a document the caller may not read (`Denied`: "you may not
+  read `{d}`, so its text as of an earlier revision is not shown to you either", with the
+  mount's reason, or that nothing in the kernel serves `{d}`), a face that does not exist (`InvalidArgument` naming
   `as` and both faces) and no writable file module (`NotFound` saying how a host binds one).
   `tests/revision.rs` pins the text and the refusals' words.
 - **The decision trail's text face** (`urn:knowledge:trail:corpus:{c}`, `text/plain`, the
@@ -301,6 +304,7 @@ and before any conformance claim.
 | 2026-11-21 | The decision trail's faces and refusals (ledger #3888) | `tests/trail.rs` and the conformance walk over five endpoints |
 | 2026-11-24 | The document alias and its refusals (ledger #3857) | `tests/document.rs` and the conformance walk over nine endpoints |
 | 2026-11-25 | The prompt, the ontology, the draft's and the verdict's faces and refusals (ledger #3858) | `tests/draft.rs` and the conformance walk over fifteen endpoints |
+| 2026-11-27 | The refusal of a kept revision's text to a caller who may not read its document (ledger #3858) | `tests/draft.rs`: `the_kept_revision_answers_only_its_document_and_only_a_caller_who_may_read_it` |
 | 2026-11-27 | The verdict's `judged passage` line, naming the passage as of its document's revision (ledger #3858) | `tests/draft.rs`: `a_verdict_cites_the_passage_as_of_the_revision_the_person_judged` |
 
 ## References

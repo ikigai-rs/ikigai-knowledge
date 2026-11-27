@@ -276,8 +276,14 @@ source urn:knowledge:passage:revision:{r}:document:urn:knowledge:file:path:docs/
   when there is one, so an edit to the document never recomputes it, and the document only
   while it is still that revision and nothing is archived; the Turtle face also reads the
   current document, to find the current passage. With no file archive, a host that keeps
-  verdicts (`space_with_verdicts`) answers from the text its verdict store kept when a draft
-  was served over that revision, so a passage a verdict cites never needs a file write. An
+  verdicts (`space_with_verdicts`) answers from the text its verdict store kept for `{d}` when
+  a draft was served over that revision, so a passage a verdict cites never needs a file
+  write. The store keeps each revision with its document and answers only for that document,
+  and only to a caller the kernel lets read `{d}`: the module reads `{d}` under the caller's
+  capability first and refuses with `Denied` when that read is denied (or when nothing
+  serves `{d}`, so no one can decide it). A document since removed still answers a caller
+  whose grant covers its path, because the file mount judges the grant before it looks for
+  the file. An
   archive whose digest is not `{r}` is refused, never served as that revision. `text/plain`
   is the text exactly.
 - **Its Turtle face** (`as=text/turtle`) is the [Web Annotation](https://www.w3.org/TR/annotation-model/)
