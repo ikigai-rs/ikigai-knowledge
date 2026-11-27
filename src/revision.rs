@@ -12,7 +12,11 @@
 //!   different archive.
 //! - **`urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}`** is a passage as
 //!   of the revision `{r}`: the text of that revision from `{start}` to `{end}`, from the
-//!   document while it is still that revision and from the archive after it changes. Its
+//!   document while it is still that revision and from the archive after it changes (or,
+//!   with no archive, from the text a host's verdict store kept for that document when a
+//!   draft was served over that revision, so a verdict's citation needs no file write; the
+//!   kept text is served only for the document it was kept with, and only to a caller the
+//!   kernel lets read that document). Its
 //!   Turtle face is the W3C Web Annotation target: the document, a `TextQuoteSelector` and a
 //!   `TextPositionSelector`, the revision, and the same words in the current text
 //!   (`knowledge:currentPassage`) when the quote still finds them there.
@@ -291,7 +295,11 @@ fn face(inv: &Invocation<'_>) -> Result<Face> {
 }
 
 /// The endpoint at [`PASSAGE_AT_TEMPLATE`].
-pub(crate) struct PassageAtEndpoint;
+pub(crate) struct PassageAtEndpoint {
+    /// The host's verdict store, which keeps each revision a draft was served over; `None`
+    /// when the host bound none.
+    pub(crate) store: Option<std::sync::Arc<dyn crate::verdict::VerdictStore>>,
+}
 
 #[async_trait]
 impl Endpoint for PassageAtEndpoint {
@@ -316,19 +324,23 @@ impl Endpoint for PassageAtEndpoint {
         // the current passage is found. A document since removed has no current text, and
         // the archive still answers.
         let (text, current) = match face {
-            Face::Text => match read_archive(inv, &revision).await? {
-                Some(archived) => (archived, None),
-                None => match read_optional(inv, &document).await? {
-                    Some(now) if revision_of(&now) == revision => (now, None),
-                    now => return Err(unarchived(&document, &revision, now.is_some())),
-                },
-            },
+            Face::Text => {
+                match read_archive(inv, self.store.as_deref(), &document, &revision).await? {
+                    Some(archived) => (archived, None),
+                    None => match read_optional(inv, &document).await? {
+                        Some(now) if revision_of(&now) == revision => (now, None),
+                        now => return Err(unarchived(&document, &revision, now.is_some())),
+                    },
+                }
+            }
             Face::Turtle => match read_optional(inv, &document).await? {
                 Some(now) if revision_of(&now) == revision => (now.clone(), Some(now)),
-                now => match read_archive(inv, &revision).await? {
-                    Some(archived) => (archived, now),
-                    None => return Err(unarchived(&document, &revision, now.is_some())),
-                },
+                now => {
+                    match read_archive(inv, self.store.as_deref(), &document, &revision).await? {
+                        Some(archived) => (archived, now),
+                        None => return Err(unarchived(&document, &revision, now.is_some())),
+                    }
+                }
             },
         };
         let length = text.chars().count();
@@ -382,8 +394,10 @@ impl Endpoint for PassageAtEndpoint {
                  character {start} (inclusive) to {end} (exclusive). Read from the document \
                  while it is still that revision, and from its archive \
                  (urn:knowledge:file:path:revision/{r}.txt, written by a Sink to \
-                 urn:knowledge:revision:document:{d}) after it changes; an archive whose \
-                 digest is not {r} is refused. text/plain is the text exactly; as=text/turtle \
+                 urn:knowledge:revision:document:{d}) after it changes, else from the text \
+                 the host's verdict store kept for {d} when a draft was served over {r}, \
+                 only to a caller who may read {d}; an archive \
+                 whose digest is not {r} is refused. text/plain is the text exactly; as=text/turtle \
                  is its Web Annotation target: the document, a TextQuoteSelector and a \
                  TextPositionSelector, knowledge:revision, and knowledge:currentPassage when \
                  the quote finds the same words in the current text. Cached under the \
@@ -428,21 +442,70 @@ fn unarchived(document: &str, revision: &str, changed: bool) -> Error {
     ))
 }
 
-/// The text of `revision` from its archive, `None` when nothing is archived, and refused
-/// unless its digest is the revision.
-async fn read_archive(inv: &Invocation<'_>, revision: &str) -> Result<Option<String>> {
+/// The text of `revision` from its archive, else from the text the host's verdict store
+/// kept for `document` when a draft was served over it; `None` when neither holds it, and
+/// refused unless its digest is the revision.
+async fn read_archive(
+    inv: &Invocation<'_>,
+    store: Option<&dyn crate::verdict::VerdictStore>,
+    document: &str,
+    revision: &str,
+) -> Result<Option<String>> {
     let file = revision_file(revision);
-    let Some(text) = read_optional(inv, &file).await? else {
-        return Ok(None);
+    let (text, from) = match read_optional(inv, &file).await? {
+        Some(text) => (text, file),
+        None => match store {
+            Some(store) => {
+                // The store is the HOST's, so it is read only after the kernel has judged the
+                // caller's read of the document, and only for the document asked for: a
+                // revision kept for another document is not this one's.
+                may_read_document(inv, document).await?;
+                match store.revision(document, revision).await? {
+                    Some(text) => (text, "the host's verdict store".to_string()),
+                    None => return Ok(None),
+                }
+            }
+            None => return Ok(None),
+        },
     };
     if revision_of(&text) != revision {
         return Err(Error::Endpoint(format!(
-            "the archive of revision {revision} at {file} holds other text (its digest is {}), \
+            "the archive of revision {revision} at {from} holds other text (its digest is {}), \
              so it is not served as that revision",
             revision_of(&text)
         )));
     }
     Ok(Some(text))
+}
+
+/// Refuse unless the caller may read `document`, as the kernel decides it: the document is
+/// read under the CALLER's capability, the way the file archive is, and a refusal there is
+/// a refusal here.
+///
+/// A document since removed still answers a caller who could read it where it was: the
+/// mount judges the caller's grant on the path before it looks for the file, so a miss
+/// (`NotFound`) comes only to a caller the grant covers, and one without it is `Denied`
+/// whether or not the file is there. With nothing in the kernel to serve the document, no
+/// one can decide the grant, so the kept text is refused too.
+async fn may_read_document(inv: &Invocation<'_>, document: &str) -> Result<()> {
+    let iri =
+        Iri::parse(document).map_err(|e| Error::Endpoint(format!("document `{document}`: {e}")))?;
+    match inv.source(&iri).await {
+        Ok(_) => Ok(()),
+        Err(Error::NotFound(_)) => {
+            inv.depends_on(document);
+            Ok(())
+        }
+        Err(Error::Denied(why)) => Err(Error::Denied(format!(
+            "you may not read `{document}`, so its text as of an earlier revision is not \
+             shown to you either ({why})"
+        ))),
+        Err(Error::Unresolved(_)) => Err(Error::Denied(format!(
+            "nothing in this kernel serves `{document}`, so no one can say you may read it, \
+             and its text as of an earlier revision is not shown"
+        ))),
+        Err(e) => Err(e),
+    }
 }
 
 /// Where the quoted words are in `text`, by the `TextQuoteSelector`: the occurrence of

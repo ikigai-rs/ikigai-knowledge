@@ -20,7 +20,7 @@ Adapted from the [ACCESSIBILITY.md template](https://github.com/mgifford/ACCESSI
 | Private channel | [private vulnerability reporting](https://github.com/ikigai-rs/ikigai-knowledge/security/advisories/new), for anything security-sensitive |
 | Target | WCAG 2.2 Level AA, for any page or terminal that presents this output |
 | Status | Evaluation in progress. No conformance claim. |
-| Last reviewed | 2026-11-20 |
+| Last reviewed | 2026-11-27 |
 | Next review | when an endpoint, a face or an error sentence is added or changed |
 
 ## Commitment
@@ -100,7 +100,10 @@ words, the tests pin those lines exactly, and this file says what has not been t
   nor archived (`NotFound` saying the document changed or is gone, that the revision was not
   archived, how to archive one and where the current text is), an archive whose digest is not
   its name (refused, naming both digests), a Sink that finds other text already archived
-  (`Conflict` saying the revision was not archived, naming the digest found), a face that does not exist (`InvalidArgument` naming
+  (`Conflict` saying the revision was not archived, naming the digest found), text the
+  host's verdict store kept for a document the caller may not read (`Denied`: "you may not
+  read `{d}`, so its text as of an earlier revision is not shown to you either", with the
+  mount's reason, or that nothing in the kernel serves `{d}`), a face that does not exist (`InvalidArgument` naming
   `as` and both faces) and no writable file module (`NotFound` saying how a host binds one).
   `tests/revision.rs` pins the text and the refusals' words.
 - **The decision trail's text face** (`urn:knowledge:trail:corpus:{c}`, `text/plain`, the
@@ -120,6 +123,43 @@ words, the tests pin those lines exactly, and this file says what has not been t
   (`InvalidArgument` naming `topic`), a face that does not exist (`InvalidArgument` naming `as`
   and both faces), and no model in the kernel (`NotFound` saying how a host binds one), beside
   the corpus refusals above.
+- **The prompt and the ontology** (`urn:knowledge:prompt:name:{n}`, `text/plain`;
+  `urn:knowledge:ontology:name:{n}`, `text/turtle`): the prompt file's own text, unchanged, and
+  the ontology's statements as Turtle for programs. Their refusals name the file they looked
+  for (`NotFound`), the scope a caller lacks (`Denied`), an empty prompt or a malformed
+  ontology (refused naming the file).
+- **The draft's text face** (`urn:knowledge:draft:passage:{p}:model:{m}`, `text/plain`, the
+  default): a first line `draft {name}: {n} statement(s), inferred`; a sentence saying the
+  model proposed these from the passage and that they are provisional until a person's verdict
+  accepts them; `digest {hex}`; then each statement on its own line, beginning with the word
+  `inferred`, so the label is read before every statement and never carried only by its
+  position; then, when it applies, one sentence each for a reply that was not Turtle,
+  `Removed {n} statement(s) that did not satisfy the ontology {o} or had a blank node.`,
+  `Left out {n} statement(s) the corpus already states.`, and a reply that was cut. Every term
+  is written as N-Triples writes it, so a control character in a model's literal is escaped.
+  Its TriG face (`as=application/trig`) is for programs, and labels the annotation
+  `knowledge:inferred true`.
+- **The verdict's text face** (`urn:knowledge:verdict:draft:{x}`, `text/plain`, the default):
+  a first line `verdict on {draft}: {decision} by <{person}>, holds` or
+  `…, orphaned: {why}`, or `…: retracted by <{person}>, none in effect`; then
+  `judged passage <{passage as of its revision}>`, the passage the person judged, which still
+  answers the exact words after the document changes; then
+  `{n} statement(s) accepted by a person:` with each statement indented two spaces, the
+  person's `note:` when there is one, and `history: {n} act(s), the latest supersedes the
+  rest` with each act on its own indented line. A note with a control character, or longer
+  than 1000 characters, is refused (`InvalidArgument` naming `note`), so it stays one line.
+  Its Turtle face is for programs, and says `knowledge:orphaned true` when orphaned.
+- **Their refusals**: a passage name that is not one (`InvalidArgument` naming `p`), a model
+  name outside its characters (`InvalidArgument` naming `m`), a prompt or ontology the caller
+  may not read (`Denied` naming the scope, before any model is asked), no model or no SHACL
+  validator in the kernel (`NotFound` saying how a host binds one); for a verdict, a writer
+  that is not a declared person (`Denied` saying only a person writes a verdict, never a
+  model), a capability that names nobody (`Denied` saying a door mints the person), a draft
+  whose digest no served draft has (`Conflict` naming the digest and saying to read it
+  again), an act another act beat to the store (`Conflict` saying to read the verdict again),
+  a host that keeps no verdicts (`Unavailable` saying how a host binds a store), a retraction with nothing in effect (`Conflict`), an unknown decision
+  (`InvalidArgument` naming `decision` and the four), and a verdict nobody wrote (`NotFound`
+  saying no person has judged it).
 - **Self-description**: the endpoint's title, summary and argument summary, which a catalog, an
   MCP tool list or a person reading Meta sees.
 
@@ -163,6 +203,7 @@ The tests run on every pull request in CI and gate merge.
 | The corpus endpoints' faces and refusal kinds | Pass | `tests/ledger.rs` (15 tests): the graph list's exact lines, the entity and neighborhood statements, the truncation statement an answer that was cut carries and a complete one does not, the empty body a caller without a ledger's or a source's grant gets, and the kind and argument of the `e`, `n` and `nodes` refusals; `cargo test` | the graph list's lines, which statements each face holds, the refusal kind and the argument it names | the sentences of the `as`, `corpus`, undeclared-corpus and no-store refusals, which no test pins yet; how a client shows Turtle |
 | The decision trail's lines and refusal kinds | Pass | `tests/trail.rs` (13 tests): the text face's exact lines for a mixed draft, an abstention and a topic that links to nothing; the Web Annotation statements; a control character in a claim never reaching the face; the `topic` and `as` refusals, the no-model sentence, and the `Denied` naming `urn:cap:llm:use:` for a caller with no model grant; `cargo test` | each line's words and order, the counts in a number and a word that agree, the refusal kind and argument | how a client shows the lines; whether a model's sentence is clear when heard |
 | Blank nodes, trail annotation identity and literal quotes | Pass | `tests/ledger.rs` and `tests/trail.rs`; `cargo test` | graph statements omit blank terms; Turtle annotation IRIs are stable for the same topic and claim, distinguish changed ones, and preserve quoted punctuation and character offsets | how a client presents RDF or reads it aloud |
+| The draft's and the verdict's lines and refusal kinds | Pass | `tests/draft.rs` (14 tests): the draft's first line, its provisional sentence, `inferred` before each statement and the removed count; the verdict's first line for holds, orphaned (changed and gone) and retracted, the judged passage line, the accepted statements, the note, the history count; the `Denied` sentences for a model, an undeclared principal, a capability naming nobody and root; the `Conflict` for an unknown digest and for a lost race; the refusal of a note with a control character; `cargo test`, rustc 1.100.0 and 1.88 | each line's words, the counts in a number and a word that agree, the refusal kind and argument | how a client shows the lines; whether a model's literal is clear when heard |
 | Self-description is well formed | Pass | `tests/conformance.rs`, ikigai-conformance 0.14.0 (ARGSPECS, VALIDATE, OUTPUTS among its checks) | a title, a summary, every argument described and typed | whether the summary is clear when heard |
 | Automated WCAG checker (for example axe) | Blocked | this crate emits no HTML, so there is no page here to run one on | | |
 | Screen reader reading the text face and the refusals | Blocked | no screen reader has been used on this output | | |
@@ -180,6 +221,7 @@ test this repository, so every check that needs one is Blocked.**
 | Terms are full IRIs (`<http://purl.org/dc/terms/title>`), not short names | the text face | long to listen to, and the meaning is in the last segment | read the Turtle face, which keeps the declaration's prefixes |
 | C1 control characters and Unicode direction marks in a literal are written as they are | the text face | a direction override in a declaration could reorder a line on screen | declarations are configuration an operator writes; check the file |
 | Every sentence is English only | every answer | | none |
+| A draft's statements are the model's own terms, full IRIs, checked only against the ontology's shapes | the draft's text face | long to listen to, and a conformant statement can still be wrong | read the passage it was drafted from; only a person's verdict accepts it |
 | A claim's sentence is the model's own words, checked only for a supporting quote, not for clarity | the decision trail | a grounded claim can still be hard to follow | read the quote and the cited passage beneath it |
 
 No list like this is complete. Please report what you find.
@@ -261,6 +303,9 @@ and before any conformance claim.
 | 2026-11-20 | The truncation statement on an entity or neighborhood that was cut (ledger #3884) | `tests/ledger.rs`: `a_complete_neighborhood_says_nothing_about_a_cut`, `a_hub_node_shortens_the_walk_instead_of_failing_it`, `an_entity_cut_at_its_limit_says_so_and_cuts_deterministically` |
 | 2026-11-21 | The decision trail's faces and refusals (ledger #3888) | `tests/trail.rs` and the conformance walk over five endpoints |
 | 2026-11-24 | The document alias and its refusals (ledger #3857) | `tests/document.rs` and the conformance walk over nine endpoints |
+| 2026-11-25 | The prompt, the ontology, the draft's and the verdict's faces and refusals (ledger #3858) | `tests/draft.rs` and the conformance walk over fifteen endpoints |
+| 2026-11-27 | The refusal of a kept revision's text to a caller who may not read its document (ledger #3858) | `tests/draft.rs`: `the_kept_revision_answers_only_its_document_and_only_a_caller_who_may_read_it` |
+| 2026-11-27 | The verdict's `judged passage` line, naming the passage as of its document's revision (ledger #3858) | `tests/draft.rs`: `a_verdict_cites_the_passage_as_of_the_revision_the_person_judged` |
 
 ## References
 
