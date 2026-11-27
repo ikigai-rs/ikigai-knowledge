@@ -40,7 +40,8 @@ use oxrdf::{GraphName, Literal, NamedNode, NamedOrBlankNode, Quad, Term, Triple}
 use oxttl::{TriGSerializer, TurtleParser, TurtleSerializer};
 
 use crate::graph::{construct, iri, readable_graphs};
-use crate::passage::PASSAGE_PREFIX;
+use crate::passage::{read_document, slice, PASSAGE_PREFIX};
+use crate::revision::revision_of;
 use crate::trail::{LLM_ASK, LLM_USE};
 use crate::{check_name, FILE_PREFIX, FILE_TEMPLATE, FS_READ, XSD_STRING};
 
@@ -399,6 +400,11 @@ pub(crate) struct Draft {
     pub(crate) corpus: Option<String>,
     /// The passage's text, as the model saw it.
     pub(crate) text: String,
+    /// The revision of the document the passage's text was cut from.
+    pub(crate) revision: String,
+    /// The document's whole text at that revision, which the host's store keeps so the
+    /// passage as of the revision still answers after the document changes.
+    pub(crate) document_text: String,
     /// The kept statements, sorted by their N-Triples form.
     pub(crate) statements: Vec<Triple>,
     /// The model's reply was not Turtle, so nothing was drafted.
@@ -409,12 +415,13 @@ pub(crate) struct Draft {
 }
 
 impl Draft {
-    /// The digest a verdict names: of the passage, the model, the prompt, the ontology, the
-    /// corpus (if any) and the statements kept, so two drafts that propose the same thing from the same inputs
-    /// share one, and any other difference changes it.
+    /// The digest a verdict names: of the passage as of its document's revision, the model,
+    /// the prompt, the ontology, the corpus (if any) and the statements kept, so two drafts
+    /// that propose the same thing from the same inputs share one, and any other difference
+    /// (the document's text included) changes it.
     pub(crate) fn digest(&self) -> String {
         statements_digest(
-            &self.passage.iri,
+            &self.passage_at(),
             &self.model,
             &self.prompt,
             &self.ontology,
@@ -425,6 +432,17 @@ impl Draft {
 }
 
 impl Draft {
+    /// The passage as of the revision the model saw:
+    /// `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}`.
+    pub(crate) fn passage_at(&self) -> String {
+        crate::revision::passage_at_iri(
+            &self.revision,
+            &self.passage.document,
+            self.passage.start,
+            self.passage.end,
+        )
+    }
+
     /// The draft as a verdict store keeps it: its oa: annotation (TriG), and what a verdict
     /// needs of it.
     pub(crate) fn stored(&self, annotation: Vec<u8>) -> crate::verdict::StoredDraft {
@@ -433,7 +451,7 @@ impl Draft {
         crate::verdict::StoredDraft {
             draft: self.iri.clone(),
             digest: self.digest(),
-            passage_digest: text_digest(&self.text),
+            passage: self.passage_at(),
             statements: lines.join("\n"),
             annotation,
         }
@@ -463,11 +481,6 @@ pub(crate) fn statements_digest(
         hasher.update(b"\n");
     }
     hasher.finalize().to_hex().to_string()
-}
-
-/// The digest of a passage's text, which a verdict keeps so a changed passage is known.
-pub(crate) fn text_digest(text: &str) -> String {
-    blake3::hash(text.as_bytes()).to_hex().to_string()
 }
 
 /// An optional name argument, defaulting to [`DEFAULT_EXTRACTION`].
@@ -514,8 +527,8 @@ pub(crate) async fn run_draft(
             )));
         }
     }
-    let text = match inv.source(&iri(&passage.iri)?).await {
-        Ok(repr) => String::from_utf8_lossy(&repr.bytes).into_owned(),
+    match inv.source(&iri(&passage.iri)?).await {
+        Ok(_) => {}
         Err(Error::NotFound(why)) => {
             return Err(Error::NotFound(format!(
                 "no passage `{}` to draft over: {why}",
@@ -523,7 +536,12 @@ pub(crate) async fn run_draft(
             )))
         }
         Err(e) => return Err(e),
-    };
+    }
+    // The passage's text is cut from the document read once, so the text the model sees and
+    // the revision a verdict cites are of the same text.
+    let document_text = read_document(inv, &passage.document).await?;
+    let revision = revision_of(&document_text);
+    let text = slice(&document_text, passage.start, passage.end);
     let told = inv
         .source(&iri(&format!("{PROMPT_PREFIX}{prompt}"))?)
         .await?;
@@ -539,6 +557,8 @@ pub(crate) async fn run_draft(
         ontology: ontology.to_string(),
         corpus: corpus.map(str::to_string),
         text,
+        revision,
+        document_text,
         statements: Vec::new(),
         unreadable: false,
         removed: 0,
@@ -748,6 +768,9 @@ impl Endpoint for DraftEndpoint {
         let draft = run_draft(inv, &target, &prompt, &ontology, corpus.as_deref()).await?;
         let trig = draft.to_trig()?;
         if let Some(store) = &self.store {
+            store
+                .keep_revision(&draft.revision, &draft.document_text)
+                .await?;
             store.keep_draft(draft.stored(trig.clone())).await?;
         }
         let (media, bytes) = match face {

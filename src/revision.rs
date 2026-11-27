@@ -12,7 +12,9 @@
 //!   different archive.
 //! - **`urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}`** is a passage as
 //!   of the revision `{r}`: the text of that revision from `{start}` to `{end}`, from the
-//!   document while it is still that revision and from the archive after it changes. Its
+//!   document while it is still that revision and from the archive after it changes (or,
+//!   with no archive, from the text a host's verdict store kept when a draft was served over
+//!   that revision, so a verdict's citation needs no file write). Its
 //!   Turtle face is the W3C Web Annotation target: the document, a `TextQuoteSelector` and a
 //!   `TextPositionSelector`, the revision, and the same words in the current text
 //!   (`knowledge:currentPassage`) when the quote still finds them there.
@@ -291,7 +293,11 @@ fn face(inv: &Invocation<'_>) -> Result<Face> {
 }
 
 /// The endpoint at [`PASSAGE_AT_TEMPLATE`].
-pub(crate) struct PassageAtEndpoint;
+pub(crate) struct PassageAtEndpoint {
+    /// The host's verdict store, which keeps each revision a draft was served over; `None`
+    /// when the host bound none.
+    pub(crate) store: Option<std::sync::Arc<dyn crate::verdict::VerdictStore>>,
+}
 
 #[async_trait]
 impl Endpoint for PassageAtEndpoint {
@@ -316,7 +322,7 @@ impl Endpoint for PassageAtEndpoint {
         // the current passage is found. A document since removed has no current text, and
         // the archive still answers.
         let (text, current) = match face {
-            Face::Text => match read_archive(inv, &revision).await? {
+            Face::Text => match read_archive(inv, self.store.as_deref(), &revision).await? {
                 Some(archived) => (archived, None),
                 None => match read_optional(inv, &document).await? {
                     Some(now) if revision_of(&now) == revision => (now, None),
@@ -325,7 +331,7 @@ impl Endpoint for PassageAtEndpoint {
             },
             Face::Turtle => match read_optional(inv, &document).await? {
                 Some(now) if revision_of(&now) == revision => (now.clone(), Some(now)),
-                now => match read_archive(inv, &revision).await? {
+                now => match read_archive(inv, self.store.as_deref(), &revision).await? {
                     Some(archived) => (archived, now),
                     None => return Err(unarchived(&document, &revision, now.is_some())),
                 },
@@ -382,8 +388,9 @@ impl Endpoint for PassageAtEndpoint {
                  character {start} (inclusive) to {end} (exclusive). Read from the document \
                  while it is still that revision, and from its archive \
                  (urn:knowledge:file:path:revision/{r}.txt, written by a Sink to \
-                 urn:knowledge:revision:document:{d}) after it changes; an archive whose \
-                 digest is not {r} is refused. text/plain is the text exactly; as=text/turtle \
+                 urn:knowledge:revision:document:{d}) after it changes, else from the text \
+                 the host's verdict store kept when a draft was served over {r}; an archive \
+                 whose digest is not {r} is refused. text/plain is the text exactly; as=text/turtle \
                  is its Web Annotation target: the document, a TextQuoteSelector and a \
                  TextPositionSelector, knowledge:revision, and knowledge:currentPassage when \
                  the quote finds the same words in the current text. Cached under the \
@@ -428,16 +435,28 @@ fn unarchived(document: &str, revision: &str, changed: bool) -> Error {
     ))
 }
 
-/// The text of `revision` from its archive, `None` when nothing is archived, and refused
-/// unless its digest is the revision.
-async fn read_archive(inv: &Invocation<'_>, revision: &str) -> Result<Option<String>> {
+/// The text of `revision` from its archive, else from the text the host's verdict store
+/// kept when a draft was served over it; `None` when neither holds it, and refused unless its
+/// digest is the revision.
+async fn read_archive(
+    inv: &Invocation<'_>,
+    store: Option<&dyn crate::verdict::VerdictStore>,
+    revision: &str,
+) -> Result<Option<String>> {
     let file = revision_file(revision);
-    let Some(text) = read_optional(inv, &file).await? else {
-        return Ok(None);
+    let (text, from) = match read_optional(inv, &file).await? {
+        Some(text) => (text, file),
+        None => match store {
+            Some(store) => match store.revision(revision).await? {
+                Some(text) => (text, "the host's verdict store".to_string()),
+                None => return Ok(None),
+            },
+            None => return Ok(None),
+        },
     };
     if revision_of(&text) != revision {
         return Err(Error::Endpoint(format!(
-            "the archive of revision {revision} at {file} holds other text (its digest is {}), \
+            "the archive of revision {revision} at {from} holds other text (its digest is {}), \
              so it is not served as that revision",
             revision_of(&text)
         )));

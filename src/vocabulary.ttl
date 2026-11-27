@@ -67,7 +67,7 @@ knowledge:model a rdf:Property ;
 knowledge:digest a rdf:Property ;
     rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
     rdfs:label "digest"@en ;
-    rdfs:comment "On a draft's annotation: a BLAKE3 digest, in hexadecimal, of the passage, model, prompt and ontology names and the statements kept. A verdict names the digest of the draft the person read."@en ;
+    rdfs:comment "On a draft's annotation: a BLAKE3 digest, in hexadecimal, of the passage as of its document's revision, the model, prompt and ontology names, the corpus (if any) and the statements kept. A verdict names the digest of the draft the person read."@en ;
     rdfs:range xsd:string .
 
 knowledge:removedStatements a rdf:Property ;
@@ -137,11 +137,11 @@ knowledge:draftDigest a rdf:Property ;
     rdfs:comment "On a verdict's act: the knowledge:digest of the draft the person judged."@en ;
     rdfs:range xsd:string .
 
-knowledge:passageDigest a rdf:Property ;
+knowledge:judgedPassage a rdf:Property ;
     rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
-    rdfs:label "passage digest"@en ;
-    rdfs:comment "On a verdict's act: a BLAKE3 digest, in hexadecimal, of the passage text the person judged, so a passage that changed is known when the verdict is replayed."@en ;
-    rdfs:range xsd:string .
+    rdfs:label "judged passage"@en ;
+    rdfs:comment "On a verdict's act: the passage the person judged, as of its document's revision, urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}. It keeps answering the exact words judged after the document changes, so an orphaned verdict still cites them; replaying compares it with the same range of the document now."@en ;
+    rdfs:range rdfs:Resource .
 
 knowledge:statements a rdf:Property ;
     rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;

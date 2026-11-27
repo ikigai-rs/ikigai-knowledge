@@ -22,9 +22,11 @@
 //! # Kept apart, replayed over what is derived
 //!
 //! The verdict lives in the host's store, never inside a draft or a derived graph, so
-//! re-deriving passages or re-running a model never touches it. Each act records the person, the decision, the digest
-//! of the draft the person read, the digest of the passage's text, and the statements it
-//! accepts (a correction's are the person's own), so:
+//! re-deriving passages or re-running a model never touches it. Each act records the person,
+//! the decision, the digest of the draft the person read, the passage it judged as of its
+//! document's revision (`urn:knowledge:passage:revision:{r}:document:{d}:range:{a}-{b}`,
+//! `knowledge:judgedPassage`), and the statements it accepts (a correction's are the person's
+//! own), so:
 //!
 //! - **A re-run model never re-applies a person's word.** An accept, reject or correction
 //!   names the digest of the draft the person read, and judges the draft the store kept under
@@ -35,6 +37,9 @@
 //!   text is what the person judged, the verdict holds; when the passage is gone, or now
 //!   holds other text, the verdict is reported ORPHANED (`knowledge:orphaned true`), never
 //!   dropped and never applied to text nobody judged.
+//! - **It cites what was judged.** The host's store keeps the document's text at each
+//!   revision a draft was served over, so the passage the act names still answers the exact
+//!   words the person judged after the document changes, an orphaned verdict's included.
 //! - **No act is lost.** A write is conditional on the version the act was decided over;
 //!   when another act landed first, the write is refused (`Conflict`), never dropped.
 //! - **Supersession.** A later act supersedes the earlier ones (`dcterms:replaces`); every
@@ -52,8 +57,9 @@ use ikigai_core::{
 use oxrdf::{Literal, NamedNode, NamedOrBlankNode, Term, Triple};
 use oxttl::{TurtleParser, TurtleSerializer};
 
-use crate::draft::{count, passage_name, split_draft, text_digest, DRAFT_PREFIX};
+use crate::draft::{count, passage_name, split_draft, DRAFT_PREFIX};
 use crate::graph::iri;
+use crate::revision::revision_of;
 use crate::XSD_STRING;
 
 /// The IRI template a verdict is served at.
@@ -86,8 +92,8 @@ pub const CORRECTED: &str = "https://ikigai-rs.dev/ns/knowledge#Corrected";
 pub const RETRACTED: &str = "https://ikigai-rs.dev/ns/knowledge#Retracted";
 /// On an act: the digest of the draft the person judged.
 pub const DRAFT_DIGEST: &str = "https://ikigai-rs.dev/ns/knowledge#draftDigest";
-/// On an act: the digest of the passage's text the person judged.
-pub const PASSAGE_DIGEST: &str = "https://ikigai-rs.dev/ns/knowledge#passageDigest";
+/// On an act: the passage the person judged, as of its document's revision.
+pub const JUDGED_PASSAGE: &str = "https://ikigai-rs.dev/ns/knowledge#judgedPassage";
 /// On an act: the statements it accepts, as N-Triples text.
 pub const STATEMENTS: &str = "https://ikigai-rs.dev/ns/knowledge#statements";
 /// On a replayed verdict, with the value `true`: the passage it judged is gone or now holds
@@ -123,8 +129,9 @@ pub struct StoredDraft {
     pub draft: String,
     /// The digest the draft's faces state, which a verdict names.
     pub digest: String,
-    /// The digest of the passage's text the model saw.
-    pub passage_digest: String,
+    /// The passage the model saw, as of its document's revision:
+    /// `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}`.
+    pub passage: String,
     /// The statements it proposed, one N-Triples line each, sorted.
     pub statements: String,
     /// The draft's `oa:Annotation`, with its body in its own named graph, as TriG.
@@ -149,6 +156,13 @@ pub trait VerdictStore: Send + Sync {
     async fn keep_draft(&self, draft: StoredDraft) -> Result<()>;
     /// The draft kept under `digest`, if any.
     async fn draft(&self, digest: &str) -> Result<Option<StoredDraft>>;
+    /// Keep a document's text at the revision `revision` a draft was served over, so the
+    /// passage a verdict cites still answers after the document changes. Content-addressed:
+    /// keeping the same revision twice keeps one.
+    async fn keep_revision(&self, revision: &str, text: &str) -> Result<()>;
+    /// The text kept at `revision`, if any. The module checks it against `revision` before
+    /// serving it.
+    async fn revision(&self, revision: &str) -> Result<Option<String>>;
 }
 
 /// A [`VerdictStore`] in memory: for tests, and for a host that keeps verdicts no longer than
@@ -164,6 +178,7 @@ pub struct MemoryVerdictStore {
     persons: BTreeSet<String>,
     verdicts: Mutex<BTreeMap<String, Vec<u8>>>,
     drafts: Mutex<BTreeMap<String, StoredDraft>>,
+    revisions: Mutex<BTreeMap<String, String>>,
 }
 
 impl MemoryVerdictStore {
@@ -219,6 +234,23 @@ impl VerdictStore for MemoryVerdictStore {
     async fn draft(&self, digest: &str) -> Result<Option<StoredDraft>> {
         let held = self.drafts.lock().map_err(poisoned)?;
         Ok(held.get(digest).cloned())
+    }
+
+    async fn keep_revision(&self, revision: &str, text: &str) -> Result<()> {
+        if revision_of(text) != revision {
+            return Err(Error::Endpoint(format!(
+                "the text offered as revision {revision} has another digest, so it is not kept"
+            )));
+        }
+        let mut held = self.revisions.lock().map_err(poisoned)?;
+        held.entry(revision.to_string())
+            .or_insert_with(|| text.to_string());
+        Ok(())
+    }
+
+    async fn revision(&self, revision: &str) -> Result<Option<String>> {
+        let held = self.revisions.lock().map_err(poisoned)?;
+        Ok(held.get(revision).cloned())
     }
 }
 
@@ -283,7 +315,8 @@ struct Act {
     person: String,
     decision: Decision,
     draft_digest: String,
-    passage_digest: String,
+    /// The passage judged, as of its document's revision.
+    passage: String,
     statements: String,
     note: Option<String>,
 }
@@ -367,7 +400,7 @@ async fn read_verdict(store: &dyn VerdictStore, draft: &str) -> Result<Option<(V
                 .and_then(|d| Decision::from_iri(&d))
                 .ok_or_else(bad)?,
             draft_digest: value(DRAFT_DIGEST).ok_or_else(bad)?,
-            passage_digest: value(PASSAGE_DIGEST).ok_or_else(bad)?,
+            passage: named(JUDGED_PASSAGE).ok_or_else(bad)?,
             statements: value(STATEMENTS).unwrap_or_default(),
             note: value(RDFS_COMMENT),
         });
@@ -422,8 +455,8 @@ impl Verdict {
             ));
             out.push(Triple::new(
                 act.clone(),
-                p(PASSAGE_DIGEST),
-                lit(&a.passage_digest),
+                p(JUDGED_PASSAGE),
+                node(&a.passage)?,
             ));
             if !a.statements.is_empty() {
                 out.push(Triple::new(act.clone(), p(STATEMENTS), lit(&a.statements)));
@@ -485,6 +518,7 @@ impl Verdict {
                     a.decision.past(),
                     a.person
                 ));
+                out.push_str(&format!("judged passage <{}>\n", a.passage));
                 let lines: Vec<&str> = a.statements.lines().filter(|l| !l.is_empty()).collect();
                 if a.decision != Decision::Reject {
                     out.push_str(&format!(
@@ -517,21 +551,31 @@ impl Verdict {
     }
 }
 
-/// Replay the act in effect over what is derived today: the passage it judged.
+/// Replay the act in effect over what is derived today: the passage it judged, compared
+/// with the same range of the document now.
 async fn replay(inv: &Invocation<'_>, verdict: &Verdict) -> Result<Replay> {
     let Some(act) = verdict.in_effect() else {
         return Ok(Replay::Holds);
     };
     let (p, _) = split_draft(&verdict.draft).unwrap_or_default();
+    let judged = match inv.source(&iri(&act.passage)?).await {
+        Ok(repr) => Some(String::from_utf8_lossy(&repr.bytes).into_owned()),
+        Err(Error::NotFound(_)) => None,
+        Err(e) => return Err(e),
+    };
     match inv.source(&iri(p)?).await {
         Ok(repr) => {
-            let text = String::from_utf8_lossy(&repr.bytes);
-            if text_digest(&text) == act.passage_digest {
-                Ok(Replay::Holds)
-            } else {
-                Ok(Replay::Orphaned(format!(
+            let now = String::from_utf8_lossy(&repr.bytes);
+            match judged {
+                Some(judged) if judged == now => Ok(Replay::Holds),
+                Some(_) => Ok(Replay::Orphaned(format!(
                     "the passage {p} now holds other text than the person judged"
-                )))
+                ))),
+                None => Ok(Replay::Orphaned(format!(
+                    "the text the person judged, {}, is no longer kept, so the passage {p} \
+                     cannot be compared with it",
+                    act.passage
+                ))),
             }
         }
         Err(Error::NotFound(_)) => Ok(Replay::Orphaned(format!("the passage {p} is gone"))),
@@ -678,7 +722,7 @@ impl VerdictEndpoint {
                 person: person.clone(),
                 decision,
                 draft_digest: current.draft_digest.clone(),
-                passage_digest: current.passage_digest.clone(),
+                passage: current.passage.clone(),
                 statements: String::new(),
                 note,
             }
@@ -706,7 +750,7 @@ impl VerdictEndpoint {
                 person: person.clone(),
                 decision,
                 draft_digest: read,
-                passage_digest: now.passage_digest.clone(),
+                passage: now.passage.clone(),
                 statements,
                 note,
             }

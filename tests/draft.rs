@@ -13,8 +13,9 @@ use std::sync::{Arc, Mutex};
 use common::*;
 use ikigai_core::{Capability, Error, Fallback, Kernel, Space, Verb};
 use ikigai_knowledge::{
-    draft_iri, ontology_scope, passage_iri, prompt_scope, verdict_iri, MemoryVerdictStore,
-    VerdictStore, FILE_PREFIX, VERDICT_READ, VERDICT_WRITE,
+    draft_iri, ontology_scope, passage_at_iri, passage_iri, persistent_path, prompt_scope,
+    revision_of, verdict_iri, MemoryVerdictStore, VerdictStore, FILE_PREFIX, VERDICT_READ,
+    VERDICT_WRITE,
 };
 
 const ALICE_PERSON: &str = "urn:example:person:alice";
@@ -121,11 +122,8 @@ fn reading(scratch: &Scratch) -> Vec<String> {
 /// A session for `principal` that holds every grant a verdict takes.
 fn judge(scratch: &Scratch, principal: &str) -> Capability {
     let mut scopes = reading(scratch);
+    // No file write: a person's verdict, and the text it cites, are kept by the host.
     scopes.push(VERDICT_WRITE.to_string());
-    scopes.push(format!(
-        "urn:cap:fs:write:{}",
-        scratch.knowledge().display()
-    ));
     Capability::scoped(scopes)
         .with_principal(principal)
         .expect("a principal")
@@ -414,11 +412,8 @@ fn no_model_writes_a_verdict() {
     ));
     // Every grant but no principal: the capability names nobody.
     let mut scopes = reading(&scratch);
+    // No file write: a person's verdict, and the text it cites, are kept by the host.
     scopes.push(VERDICT_WRITE.to_string());
-    scopes.push(format!(
-        "urn:cap:fs:write:{}",
-        scratch.knowledge().display()
-    ));
     let anonymous = Capability::scoped(scopes);
     assert!(matches!(
         judge_draft(&kernel, &accept, &anonymous),
@@ -802,6 +797,12 @@ impl VerdictStore for Racing {
     ) -> ikigai_core::Result<Option<ikigai_knowledge::StoredDraft>> {
         self.0.draft(digest).await
     }
+    async fn keep_revision(&self, revision: &str, text: &str) -> ikigai_core::Result<()> {
+        self.0.keep_revision(revision, text).await
+    }
+    async fn revision(&self, revision: &str) -> ikigai_core::Result<Option<String>> {
+        self.0.revision(revision).await
+    }
 }
 
 struct Yield(bool);
@@ -858,4 +859,62 @@ fn two_acts_at_once_never_drop_one() {
     );
     let replayed = verdict(&kernel, None, &alice).expect("the verdict");
     assert!(replayed.contains("history: 1 act"), "{replayed}");
+}
+
+/// Hub review point 5: a verdict names the passage as of its document's revision, so after
+/// the document changes, the orphaned verdict still cites the exact text the person judged.
+#[test]
+fn a_verdict_cites_the_passage_as_of_the_revision_the_person_judged() {
+    let scratch = setup("as-of");
+    let alice = judge(&scratch, ALICE_PERSON);
+    let kept = verdicts();
+    let document = format!("{FILE_PREFIX}docs/decision.md");
+    let judged = passage_at_iri(&revision_of(DOC), &document, 0, 32);
+    {
+        let (kernel, _) = host_with(&scratch, REPLY, None, kept.clone());
+        let digest = digest_of(&read_draft(&kernel, None, &alice).expect("the draft"));
+        judge_draft(
+            &kernel,
+            &[("decision", "accept"), ("digest", digest.as_str())],
+            &alice,
+        )
+        .expect("accepted");
+    }
+    // Nothing archived a file: the person held no file write, and the revisions directory
+    // was never written.
+    assert!(!scratch.knowledge().join("revision").exists());
+
+    // The document changes: the verdict is orphaned, and still cites the revision judged.
+    std::fs::write(
+        scratch.knowledge().join("docs/decision.md"),
+        "We have not decided anything yet, and will not soon.\n",
+    )
+    .expect("rewrite");
+    let (kernel, _) = host_with(&scratch, OTHER_REPLY, None, kept.clone());
+    let orphaned = verdict(&kernel, None, &alice).expect("still there");
+    assert!(orphaned.contains("orphaned"), "{orphaned}");
+    assert!(
+        orphaned.contains(&format!("judged passage <{judged}>")),
+        "{orphaned}"
+    );
+    let turtle = verdict(&kernel, Some("text/turtle"), &alice).expect("Turtle");
+    assert!(
+        turtle.contains(&format!("knowledge:judgedPassage <{judged}>")),
+        "{turtle}"
+    );
+    assert!(!turtle.contains("passageDigest"), "{turtle}");
+    // The cited name still answers the exact words the person judged, from the host's
+    // store, after the document changed; a reader needs only the file read.
+    let reader = Capability::scoped(reading(&scratch));
+    let words = issue(&kernel, request(Verb::Source, &judged, &[]), &reader).expect("as of");
+    assert_eq!(text(&words), "Brian decided to adopt oxigraph.");
+    // Its persistent HTTP path names the same revision and range.
+    let path = persistent_path(&revision_of(DOC), &document, 0, 32).expect("a path");
+    assert!(
+        path.starts_with(&format!(
+            "passage/revision/{}/range/0-32/path/",
+            revision_of(DOC)
+        )),
+        "{path}"
+    );
 }

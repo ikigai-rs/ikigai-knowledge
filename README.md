@@ -275,8 +275,11 @@ source urn:knowledge:passage:revision:{r}:document:urn:knowledge:file:path:docs/
   is the text of revision `{r}` from `{start}` to `{end}`. The text face reads the archive
   when there is one, so an edit to the document never recomputes it, and the document only
   while it is still that revision and nothing is archived; the Turtle face also reads the
-  current document, to find the current passage. An archive whose digest is
-  not `{r}` is refused, never served as that revision. `text/plain` is the text exactly.
+  current document, to find the current passage. With no file archive, a host that keeps
+  verdicts (`space_with_verdicts`) answers from the text its verdict store kept when a draft
+  was served over that revision, so a passage a verdict cites never needs a file write. An
+  archive whose digest is not `{r}` is refused, never served as that revision. `text/plain`
+  is the text exactly.
 - **Its Turtle face** (`as=text/turtle`) is the [Web Annotation](https://www.w3.org/TR/annotation-model/)
   target: an `oa:SpecificResource` whose `oa:hasSource` is the document, with an
   `oa:TextQuoteSelector` (`oa:exact`, and up to 32 characters of `oa:prefix` and `oa:suffix`)
@@ -361,15 +364,19 @@ source urn:knowledge:verdict:draft:urn:knowledge:draft:passage:…:model:claude-
   served is kept in the verdict store under its digest (its `oa:` annotation, TriG), and the
   verdict judges that kept draft: no model is asked again, so a model that answers otherwise
   the next time never makes a verdict conflict. A digest no draft was served under is refused
-  with `Conflict`. The digest covers the passage, the model, the prompt, the ontology, the
-  `corpus=` (if any) and the statements, so a draft read with `corpus=` is accepted as read.
+  with `Conflict`. The digest covers the passage as of its document's revision, the model,
+  the prompt, the ontology, the `corpus=` (if any) and the statements, so a draft read with
+  `corpus=` is accepted as read, and a draft of the same range of other text is another
+  draft.
   A write is conditional on the verdict's version when the act began: when another act
   landed first it is refused with `Conflict`, never dropped
-  (`two_acts_at_once_never_drop_one`). Each act records the person, the decision, both
-  digests and the statements it accepts, and supersedes the one before (`dcterms:replaces`);
+  (`two_acts_at_once_never_drop_one`). Each act records the person, the decision, the
+  draft's digest, the passage judged as of its document's revision
+  (`knowledge:judgedPassage`, `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}`,
+  above) and the statements it accepts, and supersedes the one before (`dcterms:replaces`);
   every act stays in the verdict. `Source` replays the verdict: `text/plain` by default (the
-  decision in effect, by whom, whether it holds, the statements accepted, the note, then the
-  history), `as=text/turtle` for the atom's statements.
+  decision in effect, by whom, whether it holds, the judged passage, the statements accepted,
+  the note, then the history), `as=text/turtle` for the atom's statements.
 - **Persons only.** Writing takes `urn:cap:knowledge:write:verdict` AND a capability that
   names a principal (`urn:cap:principal:<iri>`, minted by the door that authenticated the
   person) that the host's `VerdictStore` declares a person. Root names nobody and is refused;
@@ -388,6 +395,10 @@ source urn:knowledge:verdict:draft:urn:knowledge:draft:passage:…:model:claude-
   accepted and is never applied to the new draft; when its passage is gone or now holds other
   text, it is reported orphaned (`knowledge:orphaned true`), never dropped
   (`tests/draft.rs` `a_verdict_survives_a_rebuild_and_is_orphaned_when_its_passage_is_gone`).
+  An orphaned verdict still cites the exact text the person judged: the host's store keeps
+  the document's text at each revision a draft was served over, so the judged passage, and
+  its persistent HTTP IRI (`persistent_path`), answer those words after the document
+  changes (`a_verdict_cites_the_passage_as_of_the_revision_the_person_judged`).
 - **Authority.** The prompt takes `urn:cap:knowledge:read:prompt:name:{n}`, the ontology
   `urn:cap:knowledge:read:ontology:name:{n}`, both with the file's read. A draft takes both
   for the prompt and ontology it uses, refused with `Denied` before any model is asked, the
@@ -461,11 +472,11 @@ small pure function, a SPARQL composer or a call to a model.
 | chunk list | `urn:knowledge:chunk:document:{d}:chunking:{n}` | list of names | a document's passages under a rule, in document order; cached under the document's and the rule's threads. Over files in the config home and source documents over them today; repository trees and lifts are ledger #3857 | **live** (files), planned, ledger #3857 |
 | passage | `urn:knowledge:passage:document:{d}:range:{start}-{end}` | tiny pure function | a slice of the document's text, in characters, end exclusive. Over files in the config home today; a slice of the lift's text once lifts land | **live** (files), planned, ledger #3857 |
 | revision | `urn:knowledge:revision:document:{d}` | tiny pure function, and a Sink | the BLAKE3 digest of the document's text, tagged `blake3-{hex}`; `Sink` archives the text, content-addressed, at `urn:knowledge:file:path:revision/{r}.txt`, never overwriting one. Over files in the config home today; a repository commit is ledger #3049 | **live** (files) |
-| passage as of a revision | `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}` | tiny pure function | the text of revision `{r}`, from the document or its archive, checked against `{r}`; its Turtle face a Web Annotation target with quote and position selectors and `knowledge:currentPassage`; behind a persistent HTTP IRI that ikigai-name 302s to it (above) | **live** (files) |
+| passage as of a revision | `urn:knowledge:passage:revision:{r}:document:{d}:range:{start}-{end}` | tiny pure function | the text of revision `{r}`, from the document, its archive or the host's verdict store, checked against `{r}`; its Turtle face a Web Annotation target with quote and position selectors and `knowledge:currentPassage`; behind a persistent HTTP IRI that ikigai-name 302s to it (above) | **live** (files) |
 | prompt | `urn:knowledge:prompt:name:{n}` | resource | a text file in the config home, `knowledge/prompt/{n}.txt`, golden-threaded; the extraction prompt a draft is told. The decision trail's and the answer's prompts are still constants, ledger #3859 | **live** (extraction) |
 | ontology | `urn:knowledge:ontology:name:{n}` | resource | SHACL shapes the extracted entities and relations must satisfy: a Turtle file in the config home, `knowledge/ontology/{n}.ttl`, each blank node named under the ontology | **live** |
 | draft | `urn:knowledge:draft:passage:{p}:model:{m}` (`prompt=`, `ontology=`, `corpus=`) | composition | `urn:llm:ask` over passage and prompt; what the corpus already states left out; the rest SHACL-checked against the ontology through `urn:shacl:validate`; served as one `oa:` annotation whose body is the draft's own named graph, with `prov:wasGeneratedBy` and the model, labeled `knowledge:inferred` in every face; cacheable by input | **live** (ledger #3858) |
-| verdict | `urn:knowledge:verdict:draft:{x}` | **ATOM** | a person's accept, reject, correction or retraction, each superseding the last, in the host's verdict store, apart from everything derived and replayed over it (holds, or orphaned when its passage is gone or changed); sealed from models: a principal declared `prov:Person` only. ikigai-judge's correction loop and `sameAs` verdicts are planned | **live** (ledger #3858) |
+| verdict | `urn:knowledge:verdict:draft:{x}` | **ATOM** | a person's accept, reject, correction or retraction, each superseding the last, in the host's verdict store, apart from everything derived and replayed over it (holds, or orphaned when its passage is gone or changed), citing the passage judged as of its document's revision; sealed from models: a principal declared `prov:Person` only. ikigai-judge's correction loop and `sameAs` verdicts are planned | **live** (ledger #3858) |
 | entity | `urn:knowledge:entity:id:{e}` (`corpus=`) | generic composer | SPARQL CONSTRUCT over the corpus's graphs the caller may read, closed over `owl:sameAs` by a property path. Over the work ledger's structured graphs today; the closure over accepted verdicts, and ikigai-reason's closure, are planned (ledger #3858) | **live** (ledger), planned #3858 |
 | graph | `urn:knowledge:graph:corpus:{c}` | list of names | the named graphs of a corpus that exist and the caller may read, for `graph=` sources | **live** |
 | neighborhood | `urn:knowledge:neighborhood:entity:{e}:depth:{n}` (`corpus=`, `nodes=`) | generic composer | a bounded SPARQL CONSTRUCT walk: a depth (1 to 3) and a node budget (default 100, at most 1000) | **live** |

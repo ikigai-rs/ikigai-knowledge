@@ -144,7 +144,7 @@ pub use trail::{
 };
 pub use verdict::{
     verdict_iri, MemoryVerdictStore, StoredDraft, VerdictStore, ACCEPTED, ACT, CORRECTED, DECISION,
-    DRAFT_DIGEST, JUDGES, ORPHANED, PASSAGE_DIGEST, REJECTED, RETRACTED, SEQUENCE, STATEMENTS,
+    DRAFT_DIGEST, JUDGED_PASSAGE, JUDGES, ORPHANED, REJECTED, RETRACTED, SEQUENCE, STATEMENTS,
     VERDICT_ID, VERDICT_PREFIX, VERDICT_READ, VERDICT_TEMPLATE, VERDICT_WRITE,
 };
 
@@ -262,7 +262,9 @@ fn build(verdicts: Option<std::sync::Arc<dyn VerdictStore>>) -> EndpointSpace {
         .bind(
             UriTemplate::parse(PASSAGE_AT_TEMPLATE)
                 .expect("PASSAGE_AT_TEMPLATE is a valid template"),
-            revision::PassageAtEndpoint,
+            revision::PassageAtEndpoint {
+                store: verdicts.clone(),
+            },
         )
         .bind(
             UriTemplate::parse(PROMPT_TEMPLATE).expect("PROMPT_TEMPLATE is a valid template"),
