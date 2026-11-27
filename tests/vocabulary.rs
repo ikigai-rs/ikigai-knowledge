@@ -19,6 +19,8 @@ const SOURCES: &[(&str, &str)] = &[
     ("src/passage.rs", include_str!("../src/passage.rs")),
     ("src/document.rs", include_str!("../src/document.rs")),
     ("src/revision.rs", include_str!("../src/revision.rs")),
+    ("src/draft.rs", include_str!("../src/draft.rs")),
+    ("src/verdict.rs", include_str!("../src/verdict.rs")),
 ];
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";

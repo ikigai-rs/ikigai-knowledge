@@ -14,13 +14,13 @@
 knowledge:truncated a rdf:Property ;
     rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
     rdfs:label "truncated"@en ;
-    rdfs:comment "On an entity or neighborhood answer's own IRI, with the value true: the answer was cut, by the entity's statement limit or by the neighborhood's node budget or a hop's limit. Present only when the answer was cut; a complete answer carries none."@en ;
+    rdfs:comment "On an entity or neighborhood answer's own IRI, with the value true: the answer was cut, by the entity's statement limit or by the neighborhood's node budget or a hop's limit; on a model's draft annotation, by the draft's statement limit. Present only when the answer was cut; a complete answer carries none."@en ;
     rdfs:range xsd:boolean .
 
 knowledge:abstained a rdf:Property ;
     rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
     rdfs:label "abstained"@en ;
-    rdfs:comment "On a decision trail answer's own IRI, with the value true: the answer abstains, because the topic linked to nothing the caller may read or no claim of the draft survived the citation check. Present only when the answer abstains."@en ;
+    rdfs:comment "On a decision trail answer's own IRI, with the value true: the answer abstains, because the topic linked to nothing the caller may read or no claim of the draft survived the citation check. On a model's draft annotation: the model's reply was not Turtle, so nothing was drafted. Present only when the answer abstains."@en ;
     rdfs:range xsd:boolean .
 
 knowledge:removedClaims a rdf:Property ;
@@ -51,3 +51,106 @@ knowledge:currentPassage a rdf:Property ;
     rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
     rdfs:label "current passage"@en ;
     rdfs:comment "On a passage as of a revision: the passage of the document's current text holding the same words, found by the passage's TextQuoteSelector (its exact text with its prefix and suffix, else its exact text where it occurs once). Absent when the current text holds no such words, or the document is gone."@en .
+
+knowledge:inferred a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "inferred"@en ;
+    rdfs:comment "On a model's draft annotation, with the value true: its body is a model's inference over a passage, provisional until a person's verdict accepts it. Every draft carries it; what a person accepts is recorded by their verdict, not by changing the draft."@en ;
+    rdfs:range xsd:boolean .
+
+knowledge:model a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "model"@en ;
+    rdfs:comment "On a draft's generating activity: the model that drafted it, as the request named it to urn:llm:ask."@en ;
+    rdfs:range xsd:string .
+
+knowledge:digest a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "digest"@en ;
+    rdfs:comment "On a draft's annotation: a BLAKE3 digest, in hexadecimal, of the passage, model, prompt and ontology names and the statements kept. A verdict names the digest of the draft the person read."@en ;
+    rdfs:range xsd:string .
+
+knowledge:removedStatements a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "removed statements"@en ;
+    rdfs:comment "On a draft's annotation: how many of the model's statements were removed because they had a blank node or their subject violated the ontology's shapes. Present only when one was removed."@en ;
+    rdfs:range xsd:integer .
+
+knowledge:alreadyStated a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "already stated"@en ;
+    rdfs:comment "On a draft's annotation: how many of the model's statements were left out because the corpus's graphs the caller may read already state them. Present only when one was."@en ;
+    rdfs:range xsd:integer .
+
+knowledge:Verdict a rdfs:Class ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "verdict"@en ;
+    rdfs:comment "A person's verdict on a model's draft: an atom kept apart from everything derived, holding the acts that judged the draft, the latest in effect."@en .
+
+knowledge:judges a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "judges"@en ;
+    rdfs:comment "On a verdict: the draft it judges."@en ;
+    rdfs:range rdfs:Resource .
+
+knowledge:act a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "act"@en ;
+    rdfs:comment "On a verdict: one recorded act of a person on the draft. A later act supersedes the earlier ones, which stay as history."@en ;
+    rdfs:range rdfs:Resource .
+
+knowledge:sequence a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "sequence"@en ;
+    rdfs:comment "On a verdict's act: its place in the verdict's history, counted from 1."@en ;
+    rdfs:range xsd:integer .
+
+knowledge:decision a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "decision"@en ;
+    rdfs:comment "On a verdict's act: what the person decided, knowledge:Accepted, knowledge:Rejected, knowledge:Corrected or knowledge:Retracted."@en ;
+    rdfs:range rdfs:Resource .
+
+knowledge:Accepted a rdfs:Resource ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "accepted"@en ;
+    rdfs:comment "The decision that accepts a draft's statements as the person read them."@en .
+
+knowledge:Rejected a rdfs:Resource ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "rejected"@en ;
+    rdfs:comment "The decision that rejects a draft: none of its statements is accepted."@en .
+
+knowledge:Corrected a rdfs:Resource ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "corrected"@en ;
+    rdfs:comment "The decision that replaces a draft's statements with the person's own."@en .
+
+knowledge:Retracted a rdfs:Resource ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "retracted"@en ;
+    rdfs:comment "The decision that withdraws the verdict in effect, leaving none."@en .
+
+knowledge:draftDigest a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "draft digest"@en ;
+    rdfs:comment "On a verdict's act: the knowledge:digest of the draft the person judged."@en ;
+    rdfs:range xsd:string .
+
+knowledge:passageDigest a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "passage digest"@en ;
+    rdfs:comment "On a verdict's act: a BLAKE3 digest, in hexadecimal, of the passage text the person judged, so a passage that changed is known when the verdict is replayed."@en ;
+    rdfs:range xsd:string .
+
+knowledge:statements a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "statements"@en ;
+    rdfs:comment "On a verdict's act: the statements it accepts, as N-Triples text: the draft's for an accept, the person's own for a correction."@en ;
+    rdfs:range xsd:string .
+
+knowledge:orphaned a rdf:Property ;
+    rdfs:isDefinedBy <https://ikigai-rs.dev/ns/knowledge> ;
+    rdfs:label "orphaned"@en ;
+    rdfs:comment "On a replayed verdict, with the value true: the passage it judged is gone or now holds other text, so it applies to nothing derived today. The verdict is kept, never dropped. Present only when orphaned."@en ;
+    rdfs:range xsd:boolean .

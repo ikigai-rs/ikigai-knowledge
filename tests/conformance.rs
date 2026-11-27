@@ -22,7 +22,7 @@ use common::*;
 use ikigai_conformance::{Expected, Fixture, Suite};
 use ikigai_core::Verb;
 
-const OWN: [&str; 11] = [
+const OWN: [&str; 15] = [
     ikigai_knowledge::SOURCE_ID,
     ikigai_knowledge::GRAPH_ID,
     ikigai_knowledge::ENTITY_ID,
@@ -34,6 +34,10 @@ const OWN: [&str; 11] = [
     ikigai_knowledge::DOCUMENT_ID,
     ikigai_knowledge::REVISION_ID,
     ikigai_knowledge::PASSAGE_AT_ID,
+    ikigai_knowledge::PROMPT_ID,
+    ikigai_knowledge::ONTOLOGY_ID,
+    ikigai_knowledge::DRAFT_ID,
+    ikigai_knowledge::VERDICT_ID,
 ];
 
 /// The store's endpoints, bound beside the module.
@@ -116,7 +120,53 @@ fn conforms() {
         ikigai_knowledge::chunking_scope("another"),
         format!("urn:cap:fs:read:{}", scratch.knowledge().display()),
     ]);
-    let space = Arc::new(ikigai_knowledge::space());
+    // A prompt, an ontology and a person, for the draft and the verdict.
+    for dir in ["prompt", "ontology"] {
+        std::fs::create_dir_all(knowledge.join(dir)).expect("a dir");
+    }
+    std::fs::write(
+        knowledge.join("prompt/example.txt"),
+        "Extract the decisions.\n",
+    )
+    .expect("write the prompt");
+    std::fs::write(
+        knowledge.join("ontology/example.ttl"),
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+         <#Item> a sh:NodeShape ; sh:targetClass <https://ikigai-rs.dev/ns/ledger#Item> ;\n\
+           sh:property [ sh:path <http://purl.org/dc/terms/title> ; sh:minCount 1 ] .\n",
+    )
+    .expect("write the ontology");
+    let passage = ikigai_knowledge::passage_iri(&document, 0, 9);
+    let draft = ikigai_knowledge::draft_iri(&passage, "example");
+    let drafting = |prompt: &str| {
+        ikigai_core::Capability::scoped([
+            ikigai_knowledge::prompt_scope(prompt),
+            ikigai_knowledge::ontology_scope("example"),
+            format!("urn:cap:fs:read:{}", scratch.knowledge().display()),
+            "urn:cap:llm:use:anthropic".to_string(),
+        ])
+    };
+    let prompt = |cap: Option<ikigai_core::Capability>| {
+        let f = Fixture::new(ikigai_knowledge::PROMPT_ID, Verb::Source).binding("n", "example");
+        match cap {
+            Some(cap) => f.capability(cap),
+            None => f,
+        }
+    };
+    let ontology =
+        || Fixture::new(ikigai_knowledge::ONTOLOGY_ID, Verb::Source).binding("n", "example");
+    let drafted = || {
+        Fixture::new(ikigai_knowledge::DRAFT_ID, Verb::Source)
+            .binding("p", &passage)
+            .binding("m", "example")
+            .arg("prompt", "example")
+            .arg("ontology", "example")
+    };
+    let judged = || Fixture::new(ikigai_knowledge::VERDICT_ID, Verb::Source).binding("x", &draft);
+    // The host's verdict store, which declares Alice a person.
+    let space = Arc::new(ikigai_knowledge::space_with_verdicts(Arc::new(
+        ikigai_knowledge::MemoryVerdictStore::new().with_person("urn:example:person:alice"),
+    )));
     // The model the trail drafts with: a stub at urn:llm:ask, which a host fills with
     // ikigai-llm. Its draft cites the example item's title, so the check keeps it.
     let (llm, _) = llm_stub(&format!(
@@ -128,6 +178,7 @@ fn conforms() {
             Arc::new(mount(&scratch)),
             Arc::new(ikigai_store::space(seeded_store())),
             Arc::new(llm),
+            Arc::new(ikigai_shacl::space()),
         ];
         ikigai_core::Kernel::new(Arc::new(ikigai_core::Fallback::new(spaces)))
     };
@@ -142,6 +193,51 @@ fn conforms() {
             .arg("corpus", "example")
     };
     let hood = |id: &str| entity(id).binding("n", "2");
+    // A person's verdict on the draft, written before the walk so the verdict resolves.
+    let person = || {
+        ikigai_core::Capability::scoped([
+            ikigai_knowledge::prompt_scope("example"),
+            ikigai_knowledge::ontology_scope("example"),
+            format!("urn:cap:fs:read:{}", scratch.knowledge().display()),
+            "urn:cap:llm:use:anthropic".to_string(),
+            ikigai_knowledge::VERDICT_READ.to_string(),
+            ikigai_knowledge::VERDICT_WRITE.to_string(),
+        ])
+        .with_principal("urn:example:person:alice")
+        .expect("a principal")
+    };
+    let read = issue(
+        &kernel,
+        request(
+            Verb::Source,
+            &draft,
+            &[("prompt", "example"), ("ontology", "example")],
+        ),
+        &person(),
+    )
+    .expect("the draft");
+    let digest = text(&read)
+        .lines()
+        .find_map(|l| l.strip_prefix("digest "))
+        .expect("a digest")
+        .to_string();
+    let accept = || {
+        Fixture::new(ikigai_knowledge::VERDICT_ID, Verb::Sink)
+            .binding("x", &draft)
+            .arg("decision", "accept")
+            .arg("digest", &digest)
+            .capability(person())
+    };
+    issue(
+        &kernel,
+        request(
+            Verb::Sink,
+            &ikigai_knowledge::verdict_iri(&draft),
+            &[("decision", "accept"), ("digest", &digest)],
+        ),
+        &person(),
+    )
+    .expect("Alice's verdict");
     let mut suite = Suite::new();
     for id in STORE {
         suite = suite.inherit(
@@ -163,11 +259,17 @@ fn conforms() {
             "the model, ikigai-llm's urn:llm:ask, bound beside the module by the host; a stub \
              here, and ikigai-llm's own conformance test covers the real one",
         )
+        .inherit(
+            "shacl-validate",
+            "ikigai-shacl's urn:shacl:validate, bound beside the module by the host; a draft is \
+             checked there, and ikigai-shacl's own conformance test covers it",
+        )
         .self_named_space("knowledge", ikigai_knowledge::space)
         // The work ledger's own vocabulary, which the entity and neighborhood faces carry
         // as is: the ledger's lift is the identity.
         .namespace("https://ikigai-rs.dev/ns/ledger#")
-        // The module's own terms, held to the graph it ships rather than waived.
+        // The module's own terms, held to the graph it ships rather than waived: the draft
+        // and the verdict faces carry them.
         .vocabulary(ikigai_knowledge::VOCABULARY)
         .cacheable(ikigai_knowledge::SOURCE_ID)
         .cacheable(ikigai_knowledge::GRAPH_ID)
@@ -175,6 +277,9 @@ fn conforms() {
         .cacheable(ikigai_knowledge::NEIGHBORHOOD_ID)
         // A model drafts the trail, so it is live by decision: never served from a cache.
         .live(ikigai_knowledge::TRAIL_ID)
+        .live(ikigai_knowledge::DRAFT_ID)
+        .cacheable(ikigai_knowledge::PROMPT_ID)
+        .cacheable(ikigai_knowledge::ONTOLOGY_ID)
         .cacheable(ikigai_knowledge::CHUNKING_ID)
         .cacheable(ikigai_knowledge::CHUNK_ID)
         .cacheable(ikigai_knowledge::PASSAGE_ID)
@@ -225,12 +330,20 @@ fn conforms() {
                 .binding("name", "example")
                 .capability(reader(&scratch, "another")),
         )
+        .fixture(prompt(None))
+        .enforced_under(prompt(Some(drafting("another"))))
+        .fixture(ontology())
+        .fixture(drafted())
+        .enforced_under(drafted().capability(drafting("another")))
+        .fixture(judged().capability(person()))
+        .fixture(accept())
         .run_blocking(&kernel);
     eprintln!("{report}");
     report.assert_clean_with(&Expected::new().walked(OWN));
-    // Exactly three actions are unprobed, each by one check. BODIES for the trail: it is live
-    // by decision (a model drafts it), so two independent calls cannot be compared byte for
-    // byte. OUTPUTS for the document: a declared pass-through whose face is the target's,
+    // Exactly five actions are unprobed, each by one check. BODIES for the trail and the
+    // draft: each is live by decision (a model drafts it), so two independent calls cannot be
+    // compared byte for byte; and for the verdict, read live from the host's store, which has
+    // no golden thread. OUTPUTS for the document: a declared pass-through whose face is the target's,
     // which the walk cannot resolve from a binding; `tests/document.rs` holds the served
     // type to the target's. OUTPUTS for the revision's Sink, which archives a revision: it
     // takes no `content` (it writes the document's own text), so the walk never fires it;
@@ -255,7 +368,15 @@ fn conforms() {
             (
                 ikigai_knowledge::REVISION_ID.to_string(),
                 ikigai_conformance::Check::Outputs
-            )
+            ),
+            (
+                ikigai_knowledge::DRAFT_ID.to_string(),
+                ikigai_conformance::Check::Bodies
+            ),
+            (
+                ikigai_knowledge::VERDICT_ID.to_string(),
+                ikigai_conformance::Check::Bodies
+            ),
         ],
         "{report}"
     );

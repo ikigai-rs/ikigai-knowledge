@@ -57,3 +57,9 @@ ikigai-conformance = "0.14.0"
 # only: which resolver answers for a namespace is the operator's choice. 0.9.0 is the newest
 # release, on core 0.3. ⚠ `"0.9.0"` is `<0.10.0`.
 ikigai-name = "0.9.0"
+# The SHACL validator a host binds at `urn:shacl:validate`, so the tests check a draft against
+# its ontology the way a host serves the check. A DEV-dependency only: this crate reaches it
+# through the kernel, by IRI. 0.6.1 is the newest release on core 0.3 (0.7 moved to core 0.4);
+# default features off is its core subset validator, which refuses by name any SHACL term it
+# does not implement. ⚠ `"0.6.1"` is `<0.7.0`.
+ikigai-shacl = { version = "0.6.1", default-features = false }

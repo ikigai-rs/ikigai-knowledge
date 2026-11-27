@@ -109,11 +109,19 @@
 use std::collections::BTreeMap;
 
 mod document;
+mod draft;
 mod graph;
 mod passage;
 mod revision;
 mod trail;
+mod verdict;
 pub use document::{document_iri, DOCUMENT_BASE, DOCUMENT_ID, DOCUMENT_PREFIX, DOCUMENT_TEMPLATE};
+pub use draft::{
+    draft_iri, ontology_scope, prompt_scope, ALREADY_STATED, DEFAULT_EXTRACTION, DIGEST, DRAFT_ID,
+    DRAFT_PREFIX, DRAFT_STATEMENTS, DRAFT_TEMPLATE, INFERRED, MODEL, ONTOLOGY_ID, ONTOLOGY_PREFIX,
+    ONTOLOGY_READ, ONTOLOGY_READ_PREFIX, ONTOLOGY_TEMPLATE, PROMPT_ID, PROMPT_PREFIX, PROMPT_READ,
+    PROMPT_READ_PREFIX, PROMPT_TEMPLATE, REMOVED_STATEMENTS, SHACL_VALIDATE,
+};
 pub use graph::{
     corpus_file, corpus_scope, CORPUS_PREFIX, CORPUS_READ, CORPUS_READ_PREFIX, DEFAULT_NODES,
     ENTITY_ID, ENTITY_PREFIX, ENTITY_STATEMENTS, ENTITY_TEMPLATE, GRAPH_ID, GRAPH_PREFIX,
@@ -133,6 +141,11 @@ pub use revision::{
 pub use trail::{
     ABSTAINED, LLM_ASK, LLM_USE, MIN_QUOTE, REMOVED_CLAIMS, TRAIL_DEPTH, TRAIL_ENTITIES, TRAIL_ID,
     TRAIL_PREFIX, TRAIL_TEMPLATE,
+};
+pub use verdict::{
+    verdict_iri, MemoryVerdictStore, StoredDraft, VerdictStore, ACCEPTED, ACT, CORRECTED, DECISION,
+    DRAFT_DIGEST, JUDGES, ORPHANED, PASSAGE_DIGEST, REJECTED, RETRACTED, SEQUENCE, STATEMENTS,
+    VERDICT_ID, VERDICT_PREFIX, VERDICT_READ, VERDICT_TEMPLATE, VERDICT_WRITE,
 };
 
 use async_trait::async_trait;
@@ -190,6 +203,20 @@ const TURTLE: &str = "text/turtle";
 /// endpoint reads through (see the crate docs) beside it, never inside it. The name goes on
 /// LAST, since a later `bind` drops it.
 pub fn space() -> EndpointSpace {
+    build(None)
+}
+
+/// The module's space with the host's verdict store: the authority verdicts are kept under.
+///
+/// A verdict, the person list and the drafts a person judges live in `store`, which the HOST
+/// holds; no caller's capability reaches it, so no grant a caller holds (a file write
+/// included) can add a person or forge a verdict. Without a store ([`space`]), a verdict is
+/// unavailable.
+pub fn space_with_verdicts(store: std::sync::Arc<dyn VerdictStore>) -> EndpointSpace {
+    build(Some(store))
+}
+
+fn build(verdicts: Option<std::sync::Arc<dyn VerdictStore>>) -> EndpointSpace {
     EndpointSpace::new()
         .bind(
             UriTemplate::parse(SOURCE_TEMPLATE).expect("SOURCE_TEMPLATE is a valid template"),
@@ -237,6 +264,24 @@ pub fn space() -> EndpointSpace {
                 .expect("PASSAGE_AT_TEMPLATE is a valid template"),
             revision::PassageAtEndpoint,
         )
+        .bind(
+            UriTemplate::parse(PROMPT_TEMPLATE).expect("PROMPT_TEMPLATE is a valid template"),
+            draft::PromptEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(ONTOLOGY_TEMPLATE).expect("ONTOLOGY_TEMPLATE is a valid template"),
+            draft::OntologyEndpoint,
+        )
+        .bind(
+            UriTemplate::parse(DRAFT_TEMPLATE).expect("DRAFT_TEMPLATE is a valid template"),
+            draft::DraftEndpoint {
+                store: verdicts.clone(),
+            },
+        )
+        .bind(
+            UriTemplate::parse(VERDICT_TEMPLATE).expect("VERDICT_TEMPLATE is a valid template"),
+            verdict::VerdictEndpoint { store: verdicts },
+        )
         .named(ikigai_core::space_iri("knowledge"))
 }
 
@@ -280,16 +325,18 @@ pub(crate) fn check_name(arg: &str, name: &str) -> Result<()> {
     if ok {
         Ok(())
     } else {
-        let (kind, dir) = match arg {
-            "name" => ("source", "source"),
-            "chunking" => ("chunking rule", "chunking"),
-            _ => ("corpus", "corpus"),
+        let (kind, dir, ext) = match arg {
+            "name" => ("source", "source", "ttl"),
+            "chunking" => ("chunking rule", "chunking", "ttl"),
+            "prompt" => ("prompt", "prompt", "txt"),
+            "ontology" => ("ontology", "ontology", "ttl"),
+            _ => ("corpus", "corpus", "ttl"),
         };
         Err(Error::InvalidArgument {
             name: arg.to_string(),
             detail: format!(
                 "`{name}` is not a {kind} name: use 1 to 64 letters, digits, `-`, `_` and `.`, \
-                 not starting with `.` (the file knowledge/{dir}/{{name}}.ttl in the config home)"
+                 not starting with `.` (the file knowledge/{dir}/{{name}}.{ext} in the config home)"
             ),
         })
     }
